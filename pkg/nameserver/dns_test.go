@@ -1,0 +1,378 @@
+package nameserver
+
+import (
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+
+	"github.com/erikstmartin/go-testdb"
+	"github.com/miekg/dns"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/dotns/certo/pkg/certo"
+	"github.com/dotns/certo/pkg/database"
+)
+
+type resolver struct {
+	server string
+}
+
+var records = []string{
+	"auth.example.org. A 192.168.1.100",
+	"ns1.auth.example.org. A 192.168.1.101",
+	"cn.example.org CNAME something.example.org.",
+	"!''b', unparseable ",
+	"ns2.auth.example.org. A 192.168.1.102",
+}
+
+func loggerHasEntryWithMessage(message string, logObserver *observer.ObservedLogs) bool {
+	return len(logObserver.FilterMessage(message).All()) > 0
+}
+
+func fakeConfigAndLogger() (certo.Config, *zap.SugaredLogger, *observer.ObservedLogs) {
+	c := certo.Config{}
+	c.Database.Engine = "sqlite"
+	c.Database.Connection = ":memory:"
+	obsCore, logObserver := observer.New(zap.DebugLevel)
+	obsLogger := zap.New(obsCore).Sugar()
+	return c, obsLogger, logObserver
+}
+
+func setupDNS() (certo.NS, certo.DB, *observer.ObservedLogs) {
+	config, logger, logObserver := fakeConfigAndLogger()
+	config.General.Domain = "auth.example.org"
+	config.General.Listen = "127.0.0.1:15353"
+	config.General.Proto = "udp"
+	config.General.Nsname = "ns1.auth.example.org"
+	config.General.Nsadmin = "admin.example.org"
+	config.General.StaticRecords = records
+	config.General.Debug = false
+	db, _ := database.Init(&config, logger)
+	server := Nameserver{Config: &config, DB: db, Logger: logger, personalAuthKey: ""}
+	server.Domains = make(map[string]Records)
+	server.Server = &dns.Server{Addr: config.General.Listen, Net: config.General.Proto}
+	server.ParseRecords()
+	server.OwnDomain = "auth.example.org."
+	return &server, db, logObserver
+}
+
+func (r *resolver) lookup(host string, qtype uint16) (*dns.Msg, error) {
+	msg := new(dns.Msg)
+	msg.Id = dns.Id()
+	msg.Question = make([]dns.Question, 1)
+	msg.Question[0] = dns.Question{Name: dns.Fqdn(host), Qtype: qtype, Qclass: dns.ClassINET}
+	in, err := dns.Exchange(msg, r.server)
+	if err != nil {
+		return in, fmt.Errorf("Error querying the server [%v]", err)
+	}
+	if in != nil && in.Rcode != dns.RcodeSuccess {
+		return in, fmt.Errorf("Received error from the server [%s]", dns.RcodeToString[in.Rcode])
+	}
+	return in, nil
+}
+
+func TestQuestionDBError(t *testing.T) {
+	config, logger, _ := fakeConfigAndLogger()
+	config.General.Listen = "127.0.0.1:15353"
+	config.General.Proto = "udp"
+	config.General.Domain = "auth.example.org"
+	config.General.Nsname = "ns1.auth.example.org"
+	config.General.Nsadmin = "admin.example.org"
+	config.General.StaticRecords = records
+	config.General.Debug = false
+	db, _ := database.Init(&config, logger)
+	server := Nameserver{Config: &config, DB: db, Logger: logger, personalAuthKey: ""}
+	server.Domains = make(map[string]Records)
+	server.ParseRecords()
+	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
+		columns := []string{"Domain", "Value", "LastUpdate"}
+		return testdb.RowsFromSlice(columns, [][]driver.Value{}), errors.New("Prepared query error")
+	})
+
+	defer testdb.Reset()
+
+	tdb, err := sql.Open("testdb", "")
+	if err != nil {
+		t.Errorf("Got error: %v", err)
+	}
+	oldDb := db.GetBackend()
+
+	db.SetBackend(tdb)
+	defer db.SetBackend(oldDb)
+
+	q := dns.Question{Name: dns.Fqdn("whatever.tld"), Qtype: dns.TypeTXT, Qclass: dns.ClassINET}
+	_, err = server.answerTXT(q)
+	if err == nil {
+		t.Errorf("Expected error but got none")
+	}
+}
+
+func TestParse(t *testing.T) {
+	config, logger, logObserver := fakeConfigAndLogger()
+	config.General.Listen = "127.0.0.1:15353"
+	config.General.Proto = "udp"
+	config.General.Domain = ")"
+	config.General.Nsname = "ns1.auth.example.org"
+	config.General.Nsadmin = "admin.example.org"
+	config.General.StaticRecords = records
+	config.General.Debug = false
+	config.General.StaticRecords = []string{}
+	db, _ := database.Init(&config, logger)
+	server := Nameserver{Config: &config, DB: db, Logger: logger, personalAuthKey: ""}
+	server.Domains = make(map[string]Records)
+	server.ParseRecords()
+	if !loggerHasEntryWithMessage("Error while adding SOA record", logObserver) {
+		t.Errorf("Expected SOA parsing to return error, but did not find one")
+	}
+}
+
+func TestResolveA(t *testing.T) {
+	server, _, _ := setupDNS()
+	errChan := make(chan error, 1)
+	waitLock := sync.Mutex{}
+	waitLock.Lock()
+	server.SetNotifyStartedFunc(waitLock.Unlock)
+	go server.Start(errChan)
+	waitLock.Lock()
+	resolv := resolver{server: "127.0.0.1:15353"}
+	answer, err := resolv.lookup("auth.example.org", dns.TypeA)
+	if err != nil {
+		t.Errorf("%v", err)
+		return
+	}
+
+	if len(answer.Answer) == 0 {
+		t.Error("No answer for DNS query")
+		return
+	}
+
+	_, err = resolv.lookup("nonexistent.domain.tld", dns.TypeA)
+	if err == nil {
+		t.Errorf("Was expecting error because of NXDOMAIN but got none")
+		return
+	}
+}
+
+func TestEDNS(t *testing.T) {
+	resolv := resolver{server: "127.0.0.1:15353"}
+	answer, _ := resolv.lookup("auth.example.org", dns.TypeOPT)
+	if answer.Rcode != dns.RcodeSuccess {
+		t.Errorf("Was expecing NOERROR rcode for OPT query, but got [%s] instead.", dns.RcodeToString[answer.Rcode])
+	}
+}
+
+func TestEDNSA(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.Id = dns.Id()
+	msg.Question = make([]dns.Question, 1)
+	msg.Question[0] = dns.Question{Name: dns.Fqdn("auth.example.org"), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	// Set EDNS0 with DO=1
+	msg.SetEdns0(512, true)
+	in, err := dns.Exchange(msg, "127.0.0.1:15353")
+	if err != nil {
+		t.Errorf("Error querying the server [%v]", err)
+	}
+	if in != nil && in.Rcode != dns.RcodeSuccess {
+		t.Errorf("Received error from the server [%s]", dns.RcodeToString[in.Rcode])
+	}
+	opt := in.IsEdns0()
+	if opt == nil {
+		t.Errorf("Should have got OPT back")
+	}
+}
+
+func TestEDNSBADVERS(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.Id = dns.Id()
+	msg.Question = make([]dns.Question, 1)
+	msg.Question[0] = dns.Question{Name: dns.Fqdn("auth.example.org"), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	// Set EDNS0 with version 1
+	o := new(dns.OPT)
+	o.SetVersion(1)
+	o.Hdr.Name = "."
+	o.Hdr.Rrtype = dns.TypeOPT
+	msg.Extra = append(msg.Extra, o)
+	in, err := dns.Exchange(msg, "127.0.0.1:15353")
+	if err != nil {
+		t.Errorf("Error querying the server [%v]", err)
+	}
+	if in != nil && in.Rcode != dns.RcodeBadVers {
+		t.Errorf("Received unexpected rcode from the server [%s]", dns.RcodeToString[in.Rcode])
+	}
+}
+
+func TestResolveCNAME(t *testing.T) {
+	resolv := resolver{server: "127.0.0.1:15353"}
+	expected := "cn.example.org.	3600	IN	CNAME	something.example.org."
+	answer, err := resolv.lookup("cn.example.org", dns.TypeCNAME)
+	if err != nil {
+		t.Errorf("Got unexpected error: %s", err)
+	}
+	if len(answer.Answer) != 1 {
+		t.Errorf("Expected exactly 1 RR in answer, but got %d instead.", len(answer.Answer))
+	}
+	if answer.Answer[0].Header().Rrtype != dns.TypeCNAME {
+		t.Errorf("Expected a CNAME answer, but got [%s] instead.", dns.TypeToString[answer.Answer[0].Header().Rrtype])
+	}
+	if answer.Answer[0].String() != expected {
+		t.Errorf("Expected CNAME answer [%s] but got [%s] instead.", expected, answer.Answer[0].String())
+	}
+}
+
+func TestAuthoritative(t *testing.T) {
+	resolv := resolver{server: "127.0.0.1:15353"}
+	answer, _ := resolv.lookup("nonexistent.auth.example.org", dns.TypeA)
+	if answer.Rcode != dns.RcodeNameError {
+		t.Errorf("Was expecing NXDOMAIN rcode, but got [%s] instead.", dns.RcodeToString[answer.Rcode])
+	}
+	if len(answer.Ns) != 1 {
+		t.Errorf("Was expecting exactly one answer (SOA) for invalid subdomain, but got %d", len(answer.Ns))
+	}
+	if answer.Ns[0].Header().Rrtype != dns.TypeSOA {
+		t.Errorf("Was expecting SOA record as answer for NXDOMAIN but got [%s]", dns.TypeToString[answer.Ns[0].Header().Rrtype])
+	}
+	if !answer.Authoritative {
+		t.Errorf("Was expecting authoritative bit to be set")
+	}
+	nanswer, _ := resolv.lookup("nonexsitent.nonauth.tld", dns.TypeA)
+	if len(nanswer.Answer) > 0 {
+		t.Errorf("Didn't expect answers for non authotitative domain query")
+	}
+	if nanswer.Authoritative {
+		t.Errorf("Authoritative bit should not be set for non-authoritative domain.")
+	}
+}
+
+func TestResolveTXT(t *testing.T) {
+	iServer, db, _ := setupDNS()
+	server := iServer.(*Nameserver)
+
+	domain := "_acme-challenge.test.auth.example.org"
+	txtValue := "LHDhK3oGRvkiefQnx7OOczTY5Tic_xZ6HcMOc_gmtoM"
+
+	// Present a TXT record via the database
+	err := db.PresentTXT(domain+".", txtValue)
+	if err != nil {
+		t.Fatalf("Could not present TXT record: %v", err)
+	}
+
+	for i, test := range []struct {
+		queryDomain string
+		expTXT      string
+		getAnswer   bool
+		validAnswer bool
+	}{
+		{domain, txtValue, true, true},
+		{domain, "invalid", true, false},
+		{"nonexistent.auth.example.org", txtValue, false, false},
+	} {
+		q := dns.Question{Name: dns.Fqdn(test.queryDomain), Qtype: dns.TypeTXT, Qclass: dns.ClassINET}
+		ansRRs, rcode, _, err := server.answer(q)
+		if err != nil {
+			if test.getAnswer {
+				t.Fatalf("Test %d: Expected answer but got error: %v", i, err)
+			}
+		}
+
+		if len(ansRRs) > 0 {
+			if !test.getAnswer && rcode == dns.RcodeNameError {
+				t.Errorf("Test %d: Expected no answer, but got: [%v]", i, ansRRs)
+			}
+			if test.getAnswer {
+				err = hasExpectedTXTAnswer(ansRRs, test.expTXT)
+				if err != nil {
+					if test.validAnswer {
+						t.Errorf("Test %d: %v", i, err)
+					}
+				} else {
+					if !test.validAnswer {
+						t.Errorf("Test %d: Answer was not expected to be valid, answer [%q], compared to [%s]", i, ansRRs, test.expTXT)
+					}
+				}
+			}
+		} else {
+			if test.getAnswer {
+				t.Errorf("Test %d: Expected answer, but didn't get one", i)
+			}
+		}
+	}
+}
+
+func hasExpectedTXTAnswer(answer []dns.RR, cmpTXT string) error {
+	for _, record := range answer {
+		if rec, ok := record.(*dns.TXT); ok {
+			for _, txtValue := range rec.Txt {
+				if txtValue == cmpTXT {
+					return nil
+				}
+			}
+		} else {
+			errmsg := fmt.Sprintf("Got answer of unexpected type [%q]", answer[0])
+			return errors.New(errmsg)
+		}
+	}
+	return errors.New("Expected answer not found")
+}
+
+func TestAnswerTXTError(t *testing.T) {
+	config, logger, _ := fakeConfigAndLogger()
+	db, _ := database.Init(&config, logger)
+	server := Nameserver{Config: &config, DB: db, Logger: logger}
+
+	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
+		return testdb.RowsFromSlice([]string{}, [][]driver.Value{}), errors.New("DB error")
+	})
+	defer testdb.Reset()
+
+	tdb, _ := sql.Open("testdb", "")
+	oldDb := db.GetBackend()
+	db.SetBackend(tdb)
+	defer db.SetBackend(oldDb)
+
+	q := dns.Question{Name: "whatever.auth.example.org.", Qtype: dns.TypeTXT}
+	_, err := server.answerTXT(q)
+	if err == nil {
+		t.Errorf("Expected error from answerTXT when DB fails, got nil")
+	}
+}
+
+func TestAnswerNameError(t *testing.T) {
+	iServer, _, _ := setupDNS()
+	server := iServer.(*Nameserver)
+	q := dns.Question{Name: "notauth.com.", Qtype: dns.TypeA}
+	_, rcode, auth, _ := server.answer(q)
+	if rcode != dns.RcodeNameError {
+		t.Errorf("Expected NXDOMAIN for non-authoritative domain, got %s", dns.RcodeToString[rcode])
+	}
+	if auth {
+		t.Errorf("Expected auth bit to be false for non-authoritative domain")
+	}
+}
+
+func TestCaseInsensitiveResolveA(t *testing.T) {
+	resolv := resolver{server: "127.0.0.1:15353"}
+	answer, err := resolv.lookup("aUtH.eXAmpLe.org", dns.TypeA)
+	if err != nil {
+		t.Errorf("%v", err)
+	}
+
+	if len(answer.Answer) == 0 {
+		t.Error("No answer for DNS query")
+	}
+}
+
+func TestCaseInsensitiveResolveSOA(t *testing.T) {
+	resolv := resolver{server: "127.0.0.1:15353"}
+	answer, _ := resolv.lookup("doesnotexist.aUtH.eXAmpLe.org", dns.TypeSOA)
+	if answer.Rcode != dns.RcodeNameError {
+		t.Errorf("Was expecing NXDOMAIN rcode, but got [%s] instead.", dns.RcodeToString[answer.Rcode])
+	}
+
+	if len(answer.Ns) == 0 {
+		t.Error("No SOA answer for DNS query")
+	}
+}

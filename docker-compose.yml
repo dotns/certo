@@ -1,0 +1,11 @@
+services:
+  certo:
+    image: dotns/certo:latest
+    container_name: certo
+    restart: unless-stopped
+    ports:
+      - "53:53"
+      - "53:53/udp"
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data

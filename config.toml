@@ -1,0 +1,66 @@
+[general]
+# DNS listen address
+listen = "127.0.0.1:53"
+# protocol, "both", "both4", "both6", "udp", "udp4", "udp6" or "tcp", "tcp4", "tcp6"
+protocol = "both"
+# base domain — all user domains are mapped as <domain>.<base_domain>
+domain = "dns.example.com"
+# zone name server
+nsname = "dns.example.com"
+# admin email address, where @ is substituted with .
+nsadmin = "admin.example.com"
+# predefined records served in addition to the TXT
+records = [
+    "dns.example.com. A 198.51.100.1",
+    "dns.example.com. NS dns.example.com.",
+]
+# debug messages from CORS etc
+debug = false
+
+[database]
+# Database engine to use
+engine = "sqlite"
+# Connection string: local database path or file: URL
+connection = "data/db/certo.db"
+
+[api]
+# API domain (for httpreq endpoint display, defaults to general.domain if empty)
+api_domain = ""
+# listen ip
+ip = "0.0.0.0"
+# listen port
+port = "3000"
+# possible values: "letsencrypt", "letsencryptstaging", "cert", "none"
+tls = "none"
+# only used if tls = "cert"
+tls_cert_privkey = "/etc/tls/example.com/privkey.pem"
+tls_cert_fullchain = "/etc/tls/example.com/fullchain.pem"
+# only used if tls = "letsencrypt"
+acme_cache_dir = "data/certs"
+# optional e-mail address for Let's Encrypt expiration notices
+notification_email = ""
+# CORS AllowOrigins, wildcards can be used
+corsorigins = [
+    "*"
+]
+# use HTTP header to get the client ip
+use_header = false
+# header name to pull the ip address / list of ip addresses from
+header_name = "X-Forwarded-For"
+# JWT secret for API token signing (auto-generated if empty, set for persistence across restarts)
+jwt_secret = ""
+# Admin API key for managing all users and domains (leave empty to disable admin API)
+admin_key = ""
+# allow open account registration: POST /api/register and the anonymous acme-dns
+# POST /register. Default true; set false to lock a private deployment to existing accounts.
+allow_registration = true
+
+[logconfig]
+# logging level: "error", "warning", "info" or "debug"
+loglevel = "info"
+# possible values: stdout, file
+logtype = "stdout"
+# file path for logfile
+logfile = "data/logs/certo.log"
+# format, either "json" or "text"
+logformat = "json"

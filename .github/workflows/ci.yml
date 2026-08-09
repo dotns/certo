@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.24'
+      - name: Provide embedded SPA placeholder
+        run: mkdir -p web/dist && printf '<!doctype html><title>certo</title>' > web/dist/index.html
+      - run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l pkg/ main.go)" || (gofmt -l pkg/ main.go; exit 1)
+      - run: go build ./...
+      - run: go test ./pkg/...
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.24'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dig
+        run: sudo apt-get update && sudo apt-get install -y dnsutils
+      - name: Build certo
+        run: |
+          mkdir -p web/dist && printf '<!doctype html><title>certo</title>' > web/dist/index.html
+          go mod download
+          CGO_ENABLED=0 go build -o tests/e2e/.bin/certo .
+      - name: e2e
+        env:
+          CERTO_BIN: ${{ github.workspace }}/tests/e2e/.bin/certo
+        run: cd tests/e2e && bun test

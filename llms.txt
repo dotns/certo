@@ -1,0 +1,341 @@
+# certo — ACME httpreq Server
+
+> Self-hosted DNS server for ACME DNS-01 challenges via the lego httpreq protocol.
+> Project ID: ns-certo
+
+Source: https://github.com/dotns/certo
+Online service: https://dnsall.com
+Protocol reference: https://go-acme.github.io/lego/dns/httpreq/
+
+## Standard httpreq Protocol
+
+The lego httpreq DNS provider (https://go-acme.github.io/lego/dns/httpreq/) defines a minimal HTTP API for ACME DNS-01 challenges:
+
+### POST /present
+Store a DNS TXT record for ACME validation.
+```
+POST /present HTTP/1.1
+Content-Type: application/json
+Authorization: Basic base64(username:api_key)
+
+{"fqdn": "_acme-challenge.example.com.", "value": "LHDhK3oGRvkiefQnx7OOczTY5Tic_xZ6HcMOc_gmtoM"}
+```
+Response: HTTP 200
+
+### POST /cleanup
+Remove a DNS TXT record after validation.
+```
+POST /cleanup HTTP/1.1
+Content-Type: application/json
+Authorization: Basic base64(username:api_key)
+
+{"fqdn": "_acme-challenge.example.com.", "value": "LHDhK3oGRvkiefQnx7OOczTY5Tic_xZ6HcMOc_gmtoM"}
+```
+Response: HTTP 200
+
+### Environment Variables (lego)
+- HTTPREQ_ENDPOINT — server URL (required)
+- HTTPREQ_USERNAME — Basic Auth username
+- HTTPREQ_PASSWORD — API key (NOT the account password)
+- LEGO_DISABLE_CNAME_SUPPORT — set "true" when using CNAME delegation
+
+## ns-certo Extensions
+
+This server extends the standard httpreq protocol with multi-user management, API key system, domain registration, and CNAME delegation.
+
+### Key Concepts
+
+1. **Account vs API Key**: Account (username + password) is only for web dashboard login and key recovery. All API operations use API keys.
+2. **API Keys**: Support both Bearer token (for management API) and Basic Auth (for httpreq present/cleanup). Can manage domains directly — no need to log into the web UI.
+3. **Global Key**: Scope `["*"]` — full access to all domains. Created automatically on registration.
+4. **Scoped Key**: Scope like `["*.example.com"]` — restricted to matching domains only. Can add/delete only domains within its scope; adding a domain never changes the key's scope.
+5. **Wildcard Scope**: `*.example.com` matches `example.com` and all subdomains (`sub.example.com`, `a.b.example.com`).
+6. **Domain creation rights**: A key auto-creates a not-yet-registered domain on `/present` and on acme-dns storage fetch when the domain is within its scope (global `*` → any domain; scoped → only covered domains). Out-of-scope domains return `403`.
+7. **CNAME Delegation**: Each domain gets a deterministic subdomain (`sha256(username:domain)[:8]`). Users set a CNAME record pointing to this subdomain.
+
+### Usage Flow
+
+Prerequisites: User registers at https://dnsall.com and provides their username and API key to the client.
+
+```bash
+# Step 1: Add domain using API key (provided by user)
+curl -s POST https://api.dnsall.com/api/domains \
+  -H 'Authorization: Bearer {api_key}' \
+  -H 'Content-Type: application/json' \
+  -d '{"domain":"example.com"}'
+# → {"domain":"example.com","subdomain":"a1b2c3d4","cname_target":"a1b2c3d4.s.dnsall.com"}
+
+# Step 2: Set CNAME in your DNS
+# _acme-challenge.example.com CNAME a1b2c3d4.s.dnsall.com
+
+# Step 3: Issue certificate
+LEGO_DISABLE_CNAME_SUPPORT=true \
+HTTPREQ_ENDPOINT=https://api.dnsall.com \
+HTTPREQ_USERNAME={username} \
+HTTPREQ_PASSWORD={api_key} \
+lego --dns httpreq --dns.propagation-disable-ans \
+  --domains example.com --domains "*.example.com" \
+  --email admin@example.com --accept-tos run
+```
+
+## Complete API Reference
+
+### 1. Account Management (no auth / JWT only)
+
+Account credentials (username + password) are only for web dashboard login and key recovery.
+After login, use `GET /api/keys` to retrieve API keys for all other operations.
+
+```
+POST /api/register
+{"username": "myuser", "password": "mypassword"}
+→ 201 {"token": "jwt...", "username": "myuser"}
+
+POST /api/login
+{"username": "myuser", "password": "mypassword"}
+→ 200 {"token": "jwt...", "username": "myuser"}
+
+GET /api/profile
+Authorization: Bearer {jwt_or_global_key}
+→ 200 {"username": "myuser"}
+
+DELETE /api/profile
+Authorization: Bearer {jwt_or_global_key}
+→ 204 (deletes account, all keys, domains, and TXT records)
+```
+
+### 2. API Key Management (JWT or global key only — scoped keys cannot access)
+
+```
+GET /api/keys
+Authorization: Bearer {jwt_or_global_key}
+→ 200 [{"id":1,"name":"Default","key":"abc123...","scope":["*"],"created_at":...}]
+
+POST /api/keys
+Authorization: Bearer {jwt_or_global_key}
+{"name": "CI Server", "scope": ["*.example.com"]}
+→ 201 {"id":2,"name":"CI Server","key":"xyz789...","scope":["*.example.com"],"created_at":...}
+
+POST /api/keys   (global key)
+Authorization: Bearer {jwt_or_global_key}
+{"name": "Full Access"}
+→ 201 {"id":3,"name":"Full Access","key":"def456...","scope":["*"],"created_at":...}
+
+DELETE /api/keys/:id
+Authorization: Bearer {jwt_or_global_key}
+→ 204
+```
+
+### 3. Domain Management (JWT or API key Bearer)
+
+API keys can manage domains directly. Scoped keys can only see/add/delete domains within their scope.
+
+```
+GET /api/domains
+Authorization: Bearer {jwt_or_global_key}
+→ 200 [{"domain":"example.com","subdomain":"a1b2c3d4","cname_target":"a1b2c3d4.s.dnsall.com"}]
+
+POST /api/domains
+Authorization: Bearer {jwt_or_global_key}
+{"domain": "example.com"}
+→ 201 {"domain":"example.com","subdomain":"a1b2c3d4","cname_target":"a1b2c3d4.s.dnsall.com"}
+
+DELETE /api/domains/:domain
+Authorization: Bearer {jwt_or_global_key}
+→ 204
+```
+
+### 4. TXT Records (JWT or API key Bearer)
+
+```
+GET /api/records
+Authorization: Bearer {jwt_or_global_key}
+→ 200 [{"domain":"a1b2c3d4.s.dnsall.com","value":"challenge-token","last_update":"..."}]
+```
+
+### 5. DNS Challenge — httpreq Protocol (Basic Auth: username + api_key)
+
+```
+POST /present
+Authorization: Basic base64(username:api_key)
+{"fqdn": "_acme-challenge.example.com.", "value": "challenge-token"}
+→ 200
+
+POST /cleanup
+Authorization: Basic base64(username:api_key)
+{"fqdn": "_acme-challenge.example.com.", "value": "challenge-token"}
+→ 200
+```
+
+### 6. Admin API (X-Admin-Key header)
+
+```
+GET /admin/users → [{id, username, created_at}]
+POST /admin/users {"username", "password"} → {id, username}
+DELETE /admin/users/:id → 204
+
+GET /admin/domains → [{domain, subdomain, cname_target, owner}]
+POST /admin/domains {"user_id", "domain"} → {domain, subdomain, cname_target}
+DELETE /admin/domains/:domain → 204
+
+GET /admin/records → [{domain, value, last_update}]
+```
+
+### 7. Server Info & Provider Detection
+
+```
+GET /api/info
+→ 200 {
+  "provider": "ns-certo",
+  "version": "v1.3.0",
+  "base_domain": "s.dnsall.com",
+  "api_domain": "api.dnsall.com",
+  "capabilities": ["multi_key","scoped_key","domain_management","wildcard_scope","account_deletion","acmedns"]
+}
+```
+
+The `acmedns` capability means the server also implements the acme-dns protocol (§9).
+
+### 8. Utility
+
+```
+GET /health → 200
+GET /llms.txt → this document
+```
+
+## Client Implementation Guide — Provider Detection
+
+ns-certo is a superset of the standard httpreq protocol. Clients SHOULD detect the provider
+before using extended features, so they remain compatible with plain httpreq servers.
+
+### Recommended flow:
+
+```
+1. User registers at the web dashboard and gets username + API key
+2. User provides credentials to the client/automation system
+3. Client calls GET /api/info to detect provider
+4. If "provider": "ns-certo" → use extended API (add domains, manage keys via API key)
+5. If 404 or no "provider" → standard httpreq, only /present and /cleanup
+6. Check "capabilities" array for specific features:
+   - "domain_management" → POST/DELETE /api/domains available
+   - "multi_key" → POST /api/keys available
+   - "scoped_key" → scope field in key creation supported
+   - "wildcard_scope" → *.example.com patterns supported
+   - "account_deletion" → DELETE /api/profile available (for test cleanup only)
+```
+
+### Example client pseudocode:
+
+```python
+# Credentials are provided by the user, NOT auto-registered
+username = config["HTTPREQ_USERNAME"]  # from user
+api_key = config["HTTPREQ_PASSWORD"]   # from user
+
+info = GET(f"{endpoint}/api/info")
+
+if info.get("provider") == "ns-certo":
+    # Extended mode: add domain via API key if not already added
+    if "domain_management" in info.get("capabilities", []):
+        POST(f"{endpoint}/api/domains", {"domain": target_domain},
+             headers={"Authorization": f"Bearer {api_key}"})
+        # Response includes cname_target — user sets this CNAME in their DNS
+
+    # Then use standard httpreq for certificate issuance
+    present(fqdn, value, username, api_key)
+else:
+    # Standard httpreq: just present/cleanup with pre-configured credentials
+    present(fqdn, value, username, password)
+```
+
+## Traefik Integration
+
+```yaml
+# traefik.yml
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@example.com
+      storage: /data/ssl/acme.json
+      dnsChallenge:
+        provider: httpreq
+        propagation:
+          disableChecks: true
+
+# docker-compose environment
+LEGO_DISABLE_CNAME_SUPPORT: "true"
+HTTPREQ_ENDPOINT: "https://api.dnsall.com"
+HTTPREQ_USERNAME: "myuser"
+HTTPREQ_PASSWORD: "{api_key}"
+```
+
+## acme-dns Protocol Support
+
+In addition to httpreq, ns-certo implements the lego **acme-dns** provider over the SAME
+records (same subdomain, same TXT, same CNAME). The acme-dns API is unchanged — `/register`
+and `/update` stay on the native root paths. Two ways to obtain an account:
+  (1) **Stock acme-dns / file storage**: `POST /register` anonymously allocates an
+      `acme-<nanoid>` account bound to a random 10-char subdomain (distinct from the 8-char
+      deterministic dashboard subdomains); lego saves it to a local file.
+  (2) **HTTP storage backend**: certo also serves lego's `ACME_DNS_STORAGE_BASE_URL`,
+      returning an account derived from the caller's existing certo username + API key
+      (auth via URL userinfo) — no local JSON, no manual domain add.
+Either way, every TXT write goes to the native `POST /update`.
+
+### Client setup (lego acme-dns provider)
+```bash
+ACME_DNS_API_BASE=https://api.dnsall.com
+ACME_DNS_STORAGE_BASE_URL=https://{username}:{api_key}@api.dnsall.com/acmedns
+lego --dns acme-dns --domains example.com --domains "*.example.com" \
+  --email admin@example.com --accept-tos run
+```
+lego fetches the account from the storage URL (auth via URL userinfo = certo
+username:api_key), then sends TXT updates to the native `POST /update`. The domain is
+auto-provisioned on first fetch (within the key's scope). Set the CNAME once (same target
+as httpreq): `_acme-challenge.example.com CNAME {subdomain}.s.dnsall.com`. Once saved, the
+account works with plain file storage + `/update` — no storage URL needed (stock acme-dns).
+
+### Endpoints
+```
+POST /register               (no auth) optional body {"allowfrom":[CIDR...]}  (native acme-dns)
+  → 201 {"username":"acme-...","password","fulldomain","subdomain","allowfrom"}
+  allowfrom (if set) restricts which source IPs may /update; empty = any IP.
+POST /update                 X-Api-User + X-Api-Key headers                 (native acme-dns)
+  {"subdomain":"...","txt":"<43-char-token>"} → 200 {"txt":"..."}        (keeps 2 newest)
+GET  /acmedns/{domain}       Basic Auth (username:api_key)                  (HTTP storage Fetch)
+  → 200 {"fulldomain","subdomain","username","password","server_url"}   (get-or-create)
+GET  /acmedns                Basic Auth → {domain: account, ...}           (HTTP storage FetchAll)
+```
+`{domain}` is the cert domain (`example.com` / `*.example.com`; `*.` is normalized off).
+
+## Error Codes
+
+| Code | Meaning |
+|------|---------|
+| unauthorized | Missing or invalid credentials |
+| invalid_token | Expired or invalid JWT / API key |
+| invalid_credentials | Wrong username or password (login only) |
+| domain_not_authorized | Domain not registered for this user |
+| domain_not_in_scope | API key scope doesn't include this domain |
+| domain_already_exists | Domain already added by this user |
+| domain_required | Empty domain in request |
+| username_taken | Username already registered |
+| missing_fqdn_or_value | /present or /cleanup missing required fields |
+| invalid_json | Malformed JSON body |
+| db_error | Database operation failed |
+| global_key_required | Scoped key tried to access profile/keys management (requires JWT or global key) |
+| admin_key_not_configured | Admin API not enabled |
+| invalid_admin_key | Wrong admin key |
+
+## Important Notes for AI Clients
+
+1. **Do NOT auto-register accounts**: Users register at the web dashboard themselves. Clients receive username and API key from the user. Auto-registration is only acceptable in test/development environments.
+2. **Use API keys, not passwords**: Account password is only for web login and key recovery. All API calls use API keys as Bearer tokens or Basic Auth.
+3. **Credentials come from the user**: Ask the user for HTTPREQ_USERNAME and HTTPREQ_PASSWORD (api_key), never generate them.
+4. **Domain management via API key**: With a global key, clients can add/delete domains via `POST /api/domains` — no web UI needed for this step.
+5. **Global vs scoped keys**: Users create scoped keys (`*.example.com`) for CI/CD systems that only need access to specific domains.
+6. **Scoped key restrictions**: Scoped keys cannot access `/api/profile`, `/api/keys`, or delete accounts. Only JWT or global keys can manage keys and account settings.
+7. **Scoped key stays scoped**: A scoped key can only add domains within its scope (403 otherwise), and adding a domain never widens its scope. Scope changes require JWT or a global key.
+8. **LEGO_DISABLE_CNAME_SUPPORT=true**: Required when using CNAME delegation, prevents lego from rewriting the FQDN.
+9. **--dns.propagation-disable-ans**: Required because TXT records are on the httpreq DNS server, not the domain's authoritative NS.
+10. **Wildcard certs**: `*.example.com` and `example.com` both use `_acme-challenge.example.com` — same CNAME, lego handles both automatically.
+11. **Deterministic subdomains**: `hash(username:domain)` produces the same subdomain each time — CNAME records survive database rebuilds.
+12. **Account deletion**: `DELETE /api/profile` is for test cleanup only, not for production use.

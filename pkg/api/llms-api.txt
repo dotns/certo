@@ -1,0 +1,188 @@
+# certo API — ACME httpreq Server
+
+> Automate SSL certificate DNS verification. Manage domains and ACME DNS-01 challenges via API keys.
+> Project ID: ns-certo
+
+Endpoint: https://api.dnsall.com
+Dashboard: https://dnsall.com
+Protocol: https://go-acme.github.io/lego/dns/httpreq/
+
+## Authentication
+
+- **API Key (Bearer)**: For all management operations. Use as `Authorization: Bearer {api_key}`.
+- **API Key (Basic Auth)**: For httpreq /present and /cleanup. Use as `Authorization: Basic base64(username:api_key)`.
+- **Account password**: Only for web dashboard login and key recovery. Never used in API calls.
+
+## Quick Start
+
+Prerequisites: User registers at https://dnsall.com and provides username + API key.
+
+### 1. Add domain — using API key provided by user
+```
+POST https://api.dnsall.com/api/domains
+Authorization: Bearer {api_key}
+{"domain": "example.com"}
+→ {"domain": "example.com", "subdomain": "a1b2c3d4", "cname_target": "a1b2c3d4.s.dnsall.com"}
+```
+
+### 3. Set CNAME in your DNS
+```
+_acme-challenge.example.com  CNAME  a1b2c3d4.s.dnsall.com
+```
+
+### 4. Issue certificate
+```bash
+LEGO_DISABLE_CNAME_SUPPORT=true \
+HTTPREQ_ENDPOINT=https://api.dnsall.com \
+HTTPREQ_USERNAME=myuser \
+HTTPREQ_PASSWORD={api_key} \
+lego --dns httpreq --dns.propagation-disable-ans \
+  --domains example.com --domains "*.example.com" \
+  --email admin@example.com --accept-tos run
+```
+
+## API Key Management
+
+```
+GET https://api.dnsall.com/api/keys
+Authorization: Bearer {api_key}
+→ [{"id":1,"name":"Default","key":"abc...","scope":["*"]}]
+
+POST https://api.dnsall.com/api/keys
+Authorization: Bearer {api_key}
+{"name": "CI Server", "scope": ["*.example.com"]}
+→ {"id":2,"name":"CI Server","key":"xyz...","scope":["*.example.com"]}
+
+DELETE https://api.dnsall.com/api/keys/2
+Authorization: Bearer {api_key}
+→ 204
+```
+
+Key scopes:
+- `["*"]` — global, full access to all domains
+- `["example.com"]` — exact domain only
+- `["*.example.com"]` — matches example.com and all subdomains
+
+## Domain Management
+
+```
+GET https://api.dnsall.com/api/domains
+Authorization: Bearer {api_key}
+→ [{"domain":"example.com","subdomain":"a1b2c3d4","cname_target":"a1b2c3d4.s.dnsall.com"}]
+
+POST https://api.dnsall.com/api/domains
+Authorization: Bearer {api_key}
+{"domain": "example.com"}
+→ 201
+
+DELETE https://api.dnsall.com/api/domains/example.com
+Authorization: Bearer {api_key}
+→ 204
+```
+
+## Account & Profile
+
+```
+POST https://api.dnsall.com/api/login
+{"username": "myuser", "password": "mypassword"}
+→ {"token": "jwt...", "username": "myuser"}
+
+GET https://api.dnsall.com/api/profile
+Authorization: Bearer {jwt_or_global_key}
+→ {"username": "myuser"}
+
+DELETE https://api.dnsall.com/api/profile
+Authorization: Bearer {api_key}
+→ 204 (deletes account, all keys, domains, and TXT records)
+
+GET https://api.dnsall.com/api/info
+→ {"provider":"ns-certo","base_domain":"s.dnsall.com","api_domain":"api.dnsall.com",
+   "capabilities":["multi_key","scoped_key","domain_management","wildcard_scope","account_deletion","acmedns"]}
+
+## Provider Detection
+
+Clients should check `GET /api/info` before using extended features:
+- If `provider` is `"ns-certo"` → extended API available (keys, domains, accounts)
+- If 404 or no `provider` field → standard httpreq, only /present and /cleanup
+- Check `capabilities` array for specific feature support
+```
+
+## DNS Challenge (httpreq protocol)
+
+```
+POST https://api.dnsall.com/present
+Authorization: Basic base64(username:api_key)
+{"fqdn": "_acme-challenge.example.com.", "value": "token"}
+→ 200
+
+POST https://api.dnsall.com/cleanup
+Authorization: Basic base64(username:api_key)
+{"fqdn": "_acme-challenge.example.com.", "value": "token"}
+→ 200
+```
+
+## DNS Challenge (acme-dns protocol)
+
+Same records as httpreq. The native acme-dns API (`/register`, `/update`) is unchanged;
+certo also implements lego's HTTP storage backend (the `acmedns` capability). Get an account
+either via stock `/register` (file storage) or via the authenticated HTTP storage (certo
+username + api_key); domains are auto-provisioned.
+
+```
+# Stock acme-dns: ACME_DNS_API_BASE=https://api.dnsall.com  +  ACME_DNS_STORAGE_PATH=/file.json
+# HTTP storage:   ACME_DNS_STORAGE_BASE_URL=https://{username}:{api_key}@api.dnsall.com/acmedns
+
+# Native acme-dns register (anonymous) — allocates an acme-<nanoid> account + random subdomain
+# Optional allowfrom CIDRs restrict which source IPs may /update (empty = any).
+POST https://api.dnsall.com/register        (optional body {"allowfrom":["1.2.3.4/32"]})
+→ 201 {"username":"acme-<nanoid>","password":"<key>","fulldomain":"<sub>.s.dnsall.com",
+       "subdomain":"<sub>","allowfrom":[]}
+
+# HTTP storage Fetch (stores/serves the account; auth via URL userinfo)
+GET https://api.dnsall.com/acmedns/example.com   (Basic Auth username:api_key)
+→ {"fulldomain":"<sub>.s.dnsall.com","subdomain":"<sub>","username":"<username>",
+   "password":"<api_key>","server_url":"https://api.dnsall.com"}
+
+# Native acme-dns update (the real TXT write; works with any acme-dns client / file storage)
+POST https://api.dnsall.com/update
+X-Api-User: <username>
+X-Api-Key: <api_key>
+{"subdomain": "<sub>", "txt": "<43-char-token>"}
+→ 200 {"txt": "<43-char-token>"}
+```
+
+## View Records
+
+```
+GET https://api.dnsall.com/api/records
+Authorization: Bearer {api_key}
+→ [{"domain":"a1b2c3d4.s.dnsall.com","value":"token","last_update":"..."}]
+```
+
+## Traefik
+
+```yaml
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      dnsChallenge:
+        provider: httpreq
+        propagation:
+          disableChecks: true
+
+# environment
+LEGO_DISABLE_CNAME_SUPPORT: "true"
+HTTPREQ_ENDPOINT: "https://api.dnsall.com"
+HTTPREQ_USERNAME: "myuser"
+HTTPREQ_PASSWORD: "{api_key}"
+```
+
+## Error Codes
+
+- unauthorized — missing or invalid credentials
+- invalid_token — expired or invalid JWT / API key
+- domain_not_authorized — domain not registered for this user
+- domain_not_in_scope — API key scope doesn't include this domain
+- domain_already_exists — domain already added
+- username_taken — username already registered
+- missing_fqdn_or_value — present/cleanup missing fields

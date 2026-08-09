@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e40af"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" rx="40" fill="url(#bg)"/>
+  <!-- Lightning bolt — instant DNS challenge resolution -->
+  <path d="M90 40h35l-20 50h30l-55 75 18-50h-28z" fill="#fbbf24" opacity="0.95"/>
+  <!-- Lock outline — ACME / certificate security -->
+  <path d="M75 105v-15a25 25 0 0 1 50 0v15" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="5" stroke-linecap="round"/>
+  <!-- Status dot -->
+  <circle cx="160" cy="40" r="14" fill="#34d399"/>
+  <circle cx="160" cy="40" r="7" fill="#fff"/>
+</svg>
