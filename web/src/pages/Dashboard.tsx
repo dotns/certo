@@ -31,9 +31,11 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 type Tab = 'domains' | 'keys' | 'config';
+type Proto = 'httpreq' | 'acmedns';
 
 export default function Dashboard() {
   const [tab, setTab] = useState<Tab>('domains');
+  const [proto, setProto] = useState<Proto>('httpreq');
   const [domains, setDomains] = useState<Domain[]>([]);
   const [records, setRecords] = useState<TXTRecord[]>([]);
   const [keys, setKeys] = useState<APIKeyItem[]>([]);
@@ -267,28 +269,44 @@ export default function Dashboard() {
 
       {/* Config Tab */}
       {tab === 'config' && (() => {
-        const legoEnv = `HTTPREQ_ENDPOINT=https://${apiDomain}\nHTTPREQ_USERNAME=${username}\nHTTPREQ_PASSWORD=<your-api-key>\nLEGO_DISABLE_CNAME_SUPPORT=true`;
-        const legoCmd = `lego --dns httpreq --dns.propagation-disable-ans \\\n  --domains example.com --domains "*.example.com" \\\n  --email admin@example.com --accept-tos run`;
-        const traefikYaml = `certificatesResolvers:\n  letsencrypt:\n    acme:\n      email: admin@example.com\n      storage: /data/ssl/acme.json\n      dnsChallenge:\n        provider: httpreq\n        propagation:\n          disableChecks: true`;
-        const dockerEnv = `LEGO_DISABLE_CNAME_SUPPORT: "true"\nHTTPREQ_ENDPOINT: "https://${apiDomain}"\nHTTPREQ_USERNAME: "${username}"\nHTTPREQ_PASSWORD: "<your-api-key>"`;
+        const snippets = proto === 'httpreq' ? {
+          env: `HTTPREQ_ENDPOINT=https://${apiDomain}\nHTTPREQ_USERNAME=${username}\nHTTPREQ_PASSWORD=<your-api-key>\nLEGO_DISABLE_CNAME_SUPPORT=true`,
+          cmd: `lego --dns httpreq --dns.propagation-disable-ans \\\n  --domains example.com --domains "*.example.com" \\\n  --email admin@example.com --accept-tos run`,
+          traefik: `certificatesResolvers:\n  letsencrypt:\n    acme:\n      email: admin@example.com\n      storage: /data/ssl/acme.json\n      dnsChallenge:\n        provider: httpreq\n        propagation:\n          disableChecks: true`,
+          docker: `LEGO_DISABLE_CNAME_SUPPORT: "true"\nHTTPREQ_ENDPOINT: "https://${apiDomain}"\nHTTPREQ_USERNAME: "${username}"\nHTTPREQ_PASSWORD: "<your-api-key>"`,
+          note: null,
+        } : {
+          env: `ACME_DNS_API_BASE=https://${apiDomain}\nACME_DNS_STORAGE_BASE_URL=https://${username}:<your-api-key>@${apiDomain}/acmedns`,
+          cmd: `lego --dns acme-dns \\\n  --domains example.com --domains "*.example.com" \\\n  --email admin@example.com --accept-tos run`,
+          traefik: `certificatesResolvers:\n  letsencrypt:\n    acme:\n      email: admin@example.com\n      storage: /data/ssl/acme.json\n      dnsChallenge:\n        provider: acme-dns`,
+          docker: `ACME_DNS_API_BASE: "https://${apiDomain}"\nACME_DNS_STORAGE_BASE_URL: "https://${username}:<your-api-key>@${apiDomain}/acmedns"`,
+          note: 'acme-dns drives the same records and CNAME as httpreq. The storage URL carries your username + API key, so accounts are fetched (and domains created) automatically — no local JSON to pre-seed.',
+        };
         return (
           <div className="card tab-card">
             <div className="config-sections">
               <div className="config-section">
-                <div className="config-label">Environment Variables <CopyBtn text={legoEnv} /></div>
-                <pre className="config-pre">{legoEnv}</pre>
+                <div className="config-label">
+                  <button className={`nav-item ${proto === 'httpreq' ? 'active' : ''}`} onClick={() => setProto('httpreq')}>httpreq</button>
+                  <button className={`nav-item ${proto === 'acmedns' ? 'active' : ''}`} onClick={() => setProto('acmedns')}>acme-dns</button>
+                </div>
+                {snippets.note && <p className="scope-hint">{snippets.note}</p>}
               </div>
               <div className="config-section">
-                <div className="config-label">lego Command <CopyBtn text={legoCmd} /></div>
-                <pre className="config-pre">{legoCmd}</pre>
+                <div className="config-label">Environment Variables <CopyBtn text={snippets.env} /></div>
+                <pre className="config-pre">{snippets.env}</pre>
               </div>
               <div className="config-section">
-                <div className="config-label">Traefik — traefik.yml <CopyBtn text={traefikYaml} /></div>
-                <pre className="config-pre">{traefikYaml}</pre>
+                <div className="config-label">lego Command <CopyBtn text={snippets.cmd} /></div>
+                <pre className="config-pre">{snippets.cmd}</pre>
               </div>
               <div className="config-section">
-                <div className="config-label">Traefik — docker-compose environment <CopyBtn text={dockerEnv} /></div>
-                <pre className="config-pre">{dockerEnv}</pre>
+                <div className="config-label">Traefik — traefik.yml <CopyBtn text={snippets.traefik} /></div>
+                <pre className="config-pre">{snippets.traefik}</pre>
+              </div>
+              <div className="config-section">
+                <div className="config-label">Traefik — docker-compose environment <CopyBtn text={snippets.docker} /></div>
+                <pre className="config-pre">{snippets.docker}</pre>
               </div>
             </div>
           </div>
