@@ -1,0 +1,6 @@
+[files]
+# pkg/ and main.go are the Go implementation, removed once the Rust port reaches parity.
+extend-exclude = ["web/", "pkg/", "*.go", "go.sum", "*.lock"]
+
+[default.extend-words]
+unparseable = "unparseable"

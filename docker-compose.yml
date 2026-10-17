@@ -1,0 +1,12 @@
+services:
+  certo:
+    image: bkhq/lode:v0.1.0
+    container_name: certo
+    restart: unless-stopped
+    ports:
+      - "53:53"
+      - "53:53/udp"
+      - "3000:3000"
+    volumes:
+      # lode/lode.toml, lode/data/config.toml, database, certificates and installed releases
+      - ./lode:/srv/lode

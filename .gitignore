@@ -1,0 +1,8 @@
+dist/
+data/
+.lego/
+.idea/
+web/node_modules/
+.code-review-graph/
+.tmp/
+target/

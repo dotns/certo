@@ -1,0 +1,39 @@
+# lode.toml — runs certo under the lode supervisor (image bkhq/lode), which fetches
+# releases from GitHub, launches certo and keeps it updated.
+# Every option: https://github.com/bkhq/lode/blob/main/docs/lode.example.toml
+
+[global]
+app = "certo"
+dir = "/srv/lode"
+
+[update]
+github = "dotns/certo"
+# the release asset for this host: certo-linux-amd64.tar.gz or certo-linux-arm64.tar.gz
+asset = "certo-linux-amd64.tar.gz"
+channel = "stable"
+# off = never update, check = only log newer releases, auto = install them and restart certo
+policy = "auto"
+# seconds between checks (GitHub allows 60 unauthenticated API calls per hour and IP)
+check_interval = 3600
+# pin = "0.2.0"   # stay on one release (disables updates)
+
+[trust]
+# releases are checked against the sha256 digest GitHub publishes; they carry no publisher
+# signature yet. Once they do, pin the key here and set require_signature = "enforce".
+require_signature = "auto"
+# trusted_keys = ["<key_id>:<base64>"]
+
+[command]
+run = "./certo"
+exec = "./certo"
+# certo resolves ./data/config.toml, the database and certificates against this directory,
+# not against the version directory lode replaces on every update
+workdir = "/srv/lode"
+
+[supervise]
+restart = "on-failure"
+readiness = "none"
+# a release that exits within this many seconds is rolled back to the previous one
+health_grace = 15
+# certo drains HTTP for up to 10 s on SIGTERM
+stop_timeout = 15

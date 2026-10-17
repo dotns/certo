@@ -1,0 +1,29 @@
+[package]
+name                   = "certo-dns"
+description            = "Authoritative DNS serving for certo"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
+readme.workspace       = true
+publish                = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait    = { workspace = true }
+certo-core     = { workspace = true }
+certo-db       = { workspace = true }
+hickory-server = { workspace = true }
+ipnet          = { workspace = true }
+rustc-hash     = { workspace = true }
+rustls-pki-types = { workspace = true }
+secrecy        = { workspace = true }
+thiserror      = { workspace = true }
+time           = { workspace = true }
+tokio          = { workspace = true }
+tracing        = { workspace = true }

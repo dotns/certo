@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-26.04
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build static binaries
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: binary
+          platforms: linux/amd64,linux/arm64
+          outputs: type=local,dest=out
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            tar -C "out/linux_$arch" -czf "dist/certo-linux-$arch.tar.gz" certo
+          done
+          mkdir -p certo/lode/data/db certo/lode/data/logs certo/lode/data/certs
+          cp config.toml certo/lode/data/config.toml
+          cp lode.toml certo/lode/lode.toml
+          cp docker-compose.yml certo/
+          tar czf "dist/certo-$TAG.tar.gz" certo/
+
+      - name: Publish the GitHub release
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --generate-notes --verify-tag
+          fi
