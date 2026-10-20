@@ -131,3 +131,7 @@ Plan 20261018-0445-pdns-control-plane steps 5 and 7, task completed. Dashboard r
 ## 2026-10-18 06:40 [pitfall]
 
 The dashboard's admin area cannot live at `/admin`: `certo_api::app` routes every `/admin/*` request to the API router, so the SPA page answered a JSON 404 — it is `/manage` now. TypeScript 7.0 is not supported by typescript-eslint yet (antfu config fails to load) and drops `baseUrl`; `web/` pins `typescript` 6.0.3 until typescript-eslint supports TS 7 (recorded deviation from latest-stable). `react-refresh/only-export-components` is switched off for `src/app/routes/**` because TanStack route files must export `Route` next to their component (`allowExportNames` does not cover the local component). The e2e DNSSEC assertion compared the answer section in order; PowerDNS may return RRSIG before A, so it sorts now.
+
+## 2026-10-20 07:20 [pitfall]
+
+The first `v0.1.0` release run failed: the `backend` stage of the `Dockerfile` did not copy `pdns/`, and `certo-pdns` embeds `pdns/schema.sqlite3.sql` with `include_str!`. The stage now copies `pdns/`; verified with a local `--target binary` build (static `certo` 13.7 MB + `pdns_server`). The tag was re-pointed at the fix before any release was published.

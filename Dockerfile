@@ -39,6 +39,7 @@ RUN rustup show active-toolchain || rustup toolchain install \
  && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY pdns ./pdns
 COPY --from=frontend /build/web/dist ./web/dist
 ARG VERSION
 # Both platforms build in parallel and share these caches: `sharing=locked`
