@@ -91,6 +91,7 @@ fn api_router(state: AppState) -> Router {
             "/admin/zones",
             get(zones::admin_list).post(zones::admin_create),
         )
+        .route("/admin/zones/{zone}/activation", put(zones::set_activation))
         .merge(zone_routes("/api/zones"))
         .merge(zone_routes("/admin/zones"))
         .layer(middleware::from_fn_with_state(cors, cors::layer))
@@ -106,13 +107,10 @@ fn zone_routes(prefix: &str) -> Router<AppState> {
             get(zones::get).delete(zones::delete),
         )
         .route(
-            &format!("{prefix}/{{zone}}/records"),
-            get(zones::list_records).post(zones::add_record),
+            &format!("{prefix}/{{zone}}/rrsets"),
+            get(zones::list_rrsets).patch(zones::patch_rrsets),
         )
-        .route(
-            &format!("{prefix}/{{zone}}/records/{{id}}"),
-            put(zones::update_record).delete(zones::delete_record),
-        )
+        .route(&format!("{prefix}/{{zone}}/verify"), post(zones::verify))
         .route(
             &format!("{prefix}/{{zone}}/dnssec"),
             get(zones::get_dnssec).put(zones::set_dnssec),
@@ -133,8 +131,8 @@ fn zone_routes(prefix: &str) -> Router<AppState> {
 
 async fn readyz(State(state): State<AppState>) -> StatusCode {
     match state.db.ping().await {
-        Ok(()) => StatusCode::OK,
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        Ok(()) if state.zones.ping().await => StatusCode::OK,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 

@@ -319,14 +319,13 @@ pub(crate) async fn update(
         tracing::warn!(user = %user.username, %subdomain, client_ip = %ip, "acme-dns update: client IP not in allowfrom");
         return Err(ApiError::forbidden("ip_not_allowed"));
     }
+    let name = internal_domain(&subdomain, &state.opts.base_domain);
     state
         .db
-        .update_acmedns_txt(
-            &internal_domain(&subdomain, &state.opts.base_domain),
-            &req.txt,
-        )
+        .update_acmedns_txt(&name, &req.txt)
         .await
         .map_err(|e| ApiError::db("acme-dns update", &e))?;
+    state.zones.sync_txt(&name).await?;
     tracing::info!(user = %user.username, %subdomain, "acme-dns TXT updated");
     Ok(Json(serde_json::json!({ "txt": req.txt })))
 }

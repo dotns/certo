@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::DbError;
 
 /// Current schema version stored in `acmedns.db_version`.
-pub const DB_VERSION: u32 = 3;
+pub const DB_VERSION: u32 = 4;
 
 const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS acmedns(
@@ -40,8 +40,8 @@ CREATE TABLE IF NOT EXISTS api_keys(
 );
 ";
 
-/// Tables added in version 3: hosted zones, their records, DNSSEC and TSIG keys.
-const ZONE_TABLES: &str = "
+/// Version 3 zone tables, kept for the upgrade path; `PowerDNS` stores all of this since 4.
+const ZONE_TABLES_V3: &str = "
 CREATE TABLE IF NOT EXISTS zones(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -84,7 +84,29 @@ CREATE TABLE IF NOT EXISTS tsig_keys(
 );
 ";
 
+/// Version 4 zones: ownership and activation state; records live in `PowerDNS`.
+const ZONES_V4: &str = "
+CREATE TABLE IF NOT EXISTS zones(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    name TEXT UNIQUE NOT NULL,
+    active INTEGER NOT NULL DEFAULT 0,
+    exempt INTEGER NOT NULL DEFAULT 0,
+    verified_at INT,
+    last_check INT,
+    last_error TEXT,
+    failed_checks INTEGER NOT NULL DEFAULT 0,
+    snapshot TEXT,
+    created_at INT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+";
+
 /// Creates missing tables and upgrades older schemas to [`DB_VERSION`].
+///
+/// A version 3 database that still holds zones is left at version 3: its zones must be
+/// imported into `PowerDNS` first ([`crate::Db::legacy_zones`]), then
+/// [`crate::Db::complete_import`] finishes the upgrade.
 pub(crate) fn init(conn: &mut Connection) -> Result<(), DbError> {
     conn.execute_batch(TABLES)?;
     let stored: Option<String> = conn
@@ -96,7 +118,7 @@ pub(crate) fn init(conn: &mut Connection) -> Result<(), DbError> {
         .optional()?;
     let Some(stored) = stored.filter(|v| !v.is_empty()) else {
         let tx = conn.transaction()?;
-        tx.execute_batch(ZONE_TABLES)?;
+        tx.execute_batch(ZONES_V4)?;
         tx.execute(
             "INSERT INTO acmedns (Name, Value) VALUES ('db_version', ?1)",
             [DB_VERSION.to_string()],
@@ -116,12 +138,55 @@ pub(crate) fn init(conn: &mut Connection) -> Result<(), DbError> {
     if version < 3 {
         upgrade_2_to_3(conn)?;
     }
+    if version < 4 && !has_legacy_zones(conn)? {
+        upgrade_3_to_4(conn)?;
+    }
+    Ok(())
+}
+
+/// Stored `db_version`.
+pub(crate) fn version(conn: &Connection) -> Result<u32, DbError> {
+    let stored: String = conn.query_row(
+        "SELECT Value FROM acmedns WHERE Name='db_version'",
+        [],
+        |r| r.get(0),
+    )?;
+    stored
+        .parse()
+        .map_err(|_| DbError::InvalidVersion(stored.clone()))
+}
+
+fn has_legacy_zones(conn: &Connection) -> Result<bool, DbError> {
+    let n: i64 = conn.query_row("SELECT count(*) FROM zones", [], |r| r.get(0))?;
+    Ok(n > 0)
+}
+
+/// Replaces the version 3 zone tables with the version 4 `zones` table, keeping every
+/// zone row as active and exempt (it was served before, `PowerDNS` now has its data).
+pub(crate) fn upgrade_3_to_4(conn: &mut Connection) -> Result<(), DbError> {
+    let now = crate::store::now();
+    let tx = conn.transaction()?;
+    tx.execute_batch(&ZONES_V4.replace("zones(", "zones_v4("))?;
+    tx.execute(
+        "INSERT INTO zones_v4 (id, user_id, name, active, exempt, verified_at, last_check, created_at)
+         SELECT id, user_id, name, 1, 1, ?1, ?1, created_at FROM zones",
+        [now],
+    )?;
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS records;
+         DROP TABLE IF EXISTS zone_keys;
+         DROP TABLE IF EXISTS tsig_keys;
+         DROP TABLE zones;
+         ALTER TABLE zones_v4 RENAME TO zones;
+         UPDATE acmedns SET Value='4' WHERE Name='db_version';",
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
 fn upgrade_2_to_3(conn: &mut Connection) -> Result<(), DbError> {
     let tx = conn.transaction()?;
-    tx.execute_batch(ZONE_TABLES)?;
+    tx.execute_batch(ZONE_TABLES_V3)?;
     tx.execute_batch("UPDATE acmedns SET Value='3' WHERE Name='db_version';")?;
     tx.commit()?;
     Ok(())

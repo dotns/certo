@@ -1,6 +1,6 @@
 # certo - Task List
 
-> Updated: 2026-10-17
+> Updated: 2026-10-18
 
 ## Usage
 
@@ -31,3 +31,5 @@ Each task is a single line linking to its detail file. All detailed information 
 - [x] [**20261017-0350-audit-remediation Remediate repository audit findings**](20261017-0350-audit-remediation.md) `P1`
 - [x] [**20261017-0403-lode-self-update Updates through the lode supervisor**](20261017-0403-lode-self-update.md) `P2`
 - [x] [**20261017-0515-ci-spa-build Build the dashboard in the CI e2e job and refresh workflow actions**](20261017-0515-ci-spa-build.md) `P1`
+- [~] [**20261018-0429-system-zone Manage the base domain as a system zone instead of config records**](20261018-0429-system-zone.md) `P1`
+- [x] [**20261018-0445-pdns-control-plane Run PowerDNS as the data plane, certo as its control plane**](20261018-0445-pdns-control-plane.md) `P1`

@@ -1,27 +1,15 @@
-//! Hosted zones and their records.
-use certo_core::{TsigKey, Zone, ZoneKey, ZoneRecord};
+//! Zone ownership and activation state; the records themselves live in `PowerDNS`.
+use certo_core::Zone;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{
     Db, DbError,
-    store::{is_unique_violation, normalize, now, parse_list, scope_json},
+    store::{normalize, now, parse_list},
 };
 
-/// A record to insert or replace; fields must already be validated and canonical.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewRecord {
-    /// Owner name, lowercase without trailing dot.
-    pub name: String,
-    /// Type mnemonic.
-    pub rtype: String,
-    /// TTL in seconds.
-    pub ttl: u32,
-    /// Canonical RDATA.
-    pub data: String,
-}
-
-const ZONE_SELECT: &str = "SELECT z.id, z.user_id, u.username, z.name, z.serial, z.dnssec_enabled, \
-     z.nsec_mode, z.axfr_allow_from, z.created_at FROM zones z LEFT JOIN users u ON u.id = z.user_id";
+const ZONE_SELECT: &str = "SELECT z.id, z.user_id, u.username, z.name, z.active, z.exempt, \
+     z.verified_at, z.last_check, z.last_error, z.failed_checks, z.created_at \
+     FROM zones z LEFT JOIN users u ON u.id = z.user_id";
 
 fn zone_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Zone> {
     Ok(Zone {
@@ -29,47 +17,19 @@ fn zone_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Zone> {
         user_id: r.get(1)?,
         owner: r.get(2)?,
         name: r.get(3)?,
-        serial: r.get(4)?,
-        dnssec: r.get(5)?,
-        nsec_mode: r.get(6)?,
-        axfr_allow_from: parse_list(&r.get::<_, String>(7)?),
-        created_at: r.get(8)?,
+        active: r.get(4)?,
+        exempt: r.get(5)?,
+        verified_at: r.get(6)?,
+        last_check: r.get(7)?,
+        last_error: r.get(8)?,
+        failed_checks: r.get(9)?,
+        created_at: r.get(10)?,
     })
 }
 
-fn record_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ZoneRecord> {
-    Ok(ZoneRecord {
-        id: r.get(0)?,
-        name: r.get(1)?,
-        rtype: r.get(2)?,
-        ttl: r.get(3)?,
-        data: r.get(4)?,
-    })
-}
-
-/// Unix time as a serial, kept strictly increasing.
-fn next_serial(old: u32) -> u32 {
-    let now = u32::try_from(now()).unwrap_or(u32::MAX);
-    old.wrapping_add(1).max(now)
-}
-
-fn bump_serial(tx: &Transaction<'_>, zone_id: i64) -> Result<(), DbError> {
-    let serial: u32 = tx
-        .query_row("SELECT serial FROM zones WHERE id=?1", [zone_id], |r| {
-            r.get(0)
-        })
-        .optional()?
-        .ok_or(DbError::NotFound("zone"))?;
-    tx.execute(
-        "UPDATE zones SET serial=?1 WHERE id=?2",
-        params![next_serial(serial), zone_id],
-    )?;
-    Ok(())
-}
-
-/// Rejects a zone of another user that is an ancestor or descendant of `name`.
-fn check_overlap(tx: &Transaction<'_>, user_id: i64, name: &str) -> Result<(), DbError> {
-    let zones: Vec<(i64, String)> = tx
+/// Rejects a zone of another owner that is an ancestor or descendant of `name`.
+fn check_overlap(tx: &Transaction<'_>, user_id: Option<i64>, name: &str) -> Result<(), DbError> {
+    let zones: Vec<(Option<i64>, String)> = tx
         .prepare("SELECT user_id, name FROM zones")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
@@ -83,290 +43,97 @@ fn check_overlap(tx: &Transaction<'_>, user_id: i64, name: &str) -> Result<(), D
     Ok(())
 }
 
-/// Rejects `rec` when a CNAME would share its name with any other record
-/// (`excluding` is the id of the record being replaced).
-fn check_cname(
-    tx: &Transaction<'_>,
-    zone_id: i64,
-    rec: &NewRecord,
-    excluding: i64,
-) -> Result<(), DbError> {
-    let clash: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM records WHERE zone_id=?1 AND name=?2 AND id<>?3
-            AND (?4='CNAME' OR rtype='CNAME'))",
-        params![zone_id, rec.name, excluding, rec.rtype],
-        |r| r.get(0),
-    )?;
-    if clash {
-        return Err(DbError::Conflict("cname"));
-    }
-    Ok(())
-}
-
-fn insert_record(tx: &Transaction<'_>, zone_id: i64, rec: &NewRecord) -> Result<i64, DbError> {
-    tx.execute(
-        "INSERT INTO records (zone_id, name, rtype, ttl, rdata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![zone_id, rec.name, rec.rtype, rec.ttl, rec.data, now()],
-    )?;
-    Ok(tx.last_insert_rowid())
-}
-
-fn delete_zone_rows(tx: &Transaction<'_>, zone_id: i64) -> Result<(), DbError> {
-    for table in ["records", "zone_keys", "tsig_keys"] {
-        tx.execute(&format!("DELETE FROM {table} WHERE zone_id=?1"), [zone_id])?;
-    }
-    tx.execute("DELETE FROM zones WHERE id=?1", [zone_id])?;
-    Ok(())
-}
-
-/// Removes every zone of a user; part of the user deletion transaction.
+/// Removes every zone row of a user; part of the user deletion transaction.
 pub(crate) fn delete_user_zones(tx: &Transaction<'_>, user_id: i64) -> Result<(), DbError> {
-    let ids: Vec<i64> = tx
-        .prepare("SELECT id FROM zones WHERE user_id=?1")?
-        .query_map([user_id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    for id in ids {
-        delete_zone_rows(tx, id)?;
-    }
+    tx.execute("DELETE FROM zones WHERE user_id=?1", [user_id])?;
     Ok(())
 }
 
-fn zone_by_name(c: &Connection, name: &str) -> Result<Zone, DbError> {
-    c.query_row(&format!("{ZONE_SELECT} WHERE z.name=?1"), [name], zone_row)
+fn zone_by_id(c: &Connection, id: i64) -> Result<Zone, DbError> {
+    c.query_row(&format!("{ZONE_SELECT} WHERE z.id=?1"), [id], zone_row)
         .optional()?
         .ok_or(DbError::NotFound("zone"))
 }
 
-fn record_by_id(c: &Connection, zone_id: i64, id: i64) -> Result<ZoneRecord, DbError> {
-    c.query_row(
-        "SELECT id, name, rtype, ttl, rdata FROM records WHERE zone_id=?1 AND id=?2",
-        [zone_id, id],
-        record_row,
-    )
-    .optional()?
-    .ok_or(DbError::NotFound("record"))
+/// A version 3 zone awaiting its import into `PowerDNS`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyZone {
+    /// Owning user.
+    pub user_id: i64,
+    /// Zone apex, lowercase without trailing dot.
+    pub name: String,
+    /// DNSSEC was enabled.
+    pub dnssec: bool,
+    /// NSEC3 was selected.
+    pub nsec3: bool,
+    /// CIDRs allowed to transfer the zone.
+    pub axfr_allow_from: Vec<String>,
+    /// Records in presentation format: `(name, type, ttl, rdata)`.
+    pub records: Vec<(String, String, u32, String)>,
+    /// TSIG keys: `(name, algorithm, secret)`.
+    pub tsig_keys: Vec<(String, String, Vec<u8>)>,
 }
 
 impl Db {
-    /// Creates a zone with its initial records; the name may not overlap another
-    /// user's zone.
-    pub async fn create_zone(
-        &self,
-        user_id: i64,
-        name: &str,
-        records: Vec<NewRecord>,
-    ) -> Result<Zone, DbError> {
+    /// Creates a pending zone owned by `user_id` (`None` for the server's base zone).
+    pub async fn create_zone(&self, user_id: Option<i64>, name: &str) -> Result<Zone, DbError> {
         let name = normalize(name);
         self.run(move |c| {
             let tx = c.transaction()?;
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM zones WHERE name=?1)",
+                [&name],
+                |r| r.get(0),
+            )?;
+            if exists {
+                return Err(DbError::Conflict("zone"));
+            }
             check_overlap(&tx, user_id, &name)?;
-            match tx.execute(
-                "INSERT INTO zones (user_id, name, serial, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![user_id, name, next_serial(0), now()],
-            ) {
-                Ok(_) => {}
-                Err(e) if is_unique_violation(&e) => return Err(DbError::Conflict("zone")),
-                Err(e) => return Err(e.into()),
-            }
-            let zone_id = tx.last_insert_rowid();
-            for rec in &records {
-                insert_record(&tx, zone_id, rec)?;
-            }
-            let zone = zone_by_name(&tx, &name)?;
+            tx.execute(
+                "INSERT INTO zones (user_id, name, created_at) VALUES (?1, ?2, ?3)",
+                params![user_id, name, now()],
+            )?;
+            let id = tx.last_insert_rowid();
+            let zone = zone_by_id(&tx, id)?;
             tx.commit()?;
             Ok(zone)
         })
         .await
     }
 
-    /// Looks up a zone by apex name.
+    /// A zone by name.
     pub async fn zone(&self, name: &str) -> Result<Zone, DbError> {
         let name = normalize(name);
-        self.run(move |c| zone_by_name(c, &name)).await
+        self.run(move |c| {
+            c.query_row(&format!("{ZONE_SELECT} WHERE z.name=?1"), [name], zone_row)
+                .optional()?
+                .ok_or(DbError::NotFound("zone"))
+        })
+        .await
     }
 
-    /// Zones ordered by name, all of them or one user's.
+    /// Zones of one user, or every zone (including the base zone) for `None`.
     pub async fn zones(&self, user_id: Option<i64>) -> Result<Vec<Zone>, DbError> {
         self.run(move |c| {
             let rows = match user_id {
                 Some(uid) => c
                     .prepare(&format!("{ZONE_SELECT} WHERE z.user_id=?1 ORDER BY z.name"))?
                     .query_map([uid], zone_row)?
-                    .collect::<Result<_, _>>()?,
+                    .collect::<Result<Vec<_>, _>>()?,
                 None => c
                     .prepare(&format!("{ZONE_SELECT} ORDER BY z.name"))?
                     .query_map([], zone_row)?
-                    .collect::<Result<_, _>>()?,
+                    .collect::<Result<Vec<_>, _>>()?,
             };
             Ok(rows)
         })
         .await
     }
 
-    /// Deletes a zone with its records and keys.
+    /// Deletes a zone row.
     pub async fn delete_zone(&self, zone_id: i64) -> Result<(), DbError> {
         self.run(move |c| {
-            let tx = c.transaction()?;
-            delete_zone_rows(&tx, zone_id)?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// A zone's records ordered by name, type and id.
-    pub async fn zone_records(&self, zone_id: i64) -> Result<Vec<ZoneRecord>, DbError> {
-        self.run(move |c| {
-            let rows = c
-                .prepare(
-                    "SELECT id, name, rtype, ttl, rdata FROM records WHERE zone_id=?1 ORDER BY name, rtype, id",
-                )?
-                .query_map([zone_id], record_row)?
-                .collect::<Result<_, _>>()?;
-            Ok(rows)
-        })
-        .await
-    }
-
-    /// Adds a record and bumps the zone serial; CNAMEs are exclusive at their name.
-    pub async fn add_record(&self, zone_id: i64, rec: NewRecord) -> Result<ZoneRecord, DbError> {
-        self.run(move |c| {
-            let tx = c.transaction()?;
-            check_cname(&tx, zone_id, &rec, 0)?;
-            bump_serial(&tx, zone_id)?;
-            let id = insert_record(&tx, zone_id, &rec)?;
-            let rec = record_by_id(&tx, zone_id, id)?;
-            tx.commit()?;
-            Ok(rec)
-        })
-        .await
-    }
-
-    /// Replaces a record and bumps the zone serial; CNAMEs are exclusive at their name.
-    pub async fn update_record(
-        &self,
-        zone_id: i64,
-        id: i64,
-        rec: NewRecord,
-    ) -> Result<ZoneRecord, DbError> {
-        self.run(move |c| {
-            let tx = c.transaction()?;
-            check_cname(&tx, zone_id, &rec, id)?;
-            let changed = tx.execute(
-                "UPDATE records SET name=?1, rtype=?2, ttl=?3, rdata=?4 WHERE zone_id=?5 AND id=?6",
-                params![rec.name, rec.rtype, rec.ttl, rec.data, zone_id, id],
-            )?;
-            if changed == 0 {
-                return Err(DbError::NotFound("record"));
-            }
-            bump_serial(&tx, zone_id)?;
-            let rec = record_by_id(&tx, zone_id, id)?;
-            tx.commit()?;
-            Ok(rec)
-        })
-        .await
-    }
-
-    /// Deletes a record and bumps the zone serial.
-    pub async fn delete_record(&self, zone_id: i64, id: i64) -> Result<(), DbError> {
-        self.run(move |c| {
-            let tx = c.transaction()?;
-            let changed = tx.execute(
-                "DELETE FROM records WHERE zone_id=?1 AND id=?2",
-                [zone_id, id],
-            )?;
-            if changed == 0 {
-                return Err(DbError::NotFound("record"));
-            }
-            bump_serial(&tx, zone_id)?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await
-    }
-}
-
-impl Db {
-    /// Bumps a zone's serial without other changes (e.g. after re-signing).
-    pub async fn touch_zone(&self, zone_id: i64) -> Result<(), DbError> {
-        self.run(move |c| {
-            let tx = c.transaction()?;
-            bump_serial(&tx, zone_id)?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// Turns signing on (storing `new_key` if the zone has none) or off (deleting the
-    /// key), and bumps the serial.
-    pub async fn set_dnssec(
-        &self,
-        zone_id: i64,
-        enabled: bool,
-        nsec_mode: &str,
-        new_key: Option<(String, Vec<u8>)>,
-    ) -> Result<(), DbError> {
-        let nsec_mode = nsec_mode.to_owned();
-        self.run(move |c| {
-            let tx = c.transaction()?;
-            bump_serial(&tx, zone_id)?;
-            tx.execute(
-                "UPDATE zones SET dnssec_enabled=?1, nsec_mode=?2 WHERE id=?3",
-                params![enabled, nsec_mode, zone_id],
-            )?;
-            if enabled {
-                let has_key = tx
-                    .query_row("SELECT 1 FROM zone_keys WHERE zone_id=?1", [zone_id], |_| {
-                        Ok(())
-                    })
-                    .optional()?
-                    .is_some();
-                if let (false, Some((algorithm, pkcs8))) = (has_key, new_key) {
-                    tx.execute(
-                        "INSERT INTO zone_keys (zone_id, algorithm, private_key, created_at) VALUES (?1, ?2, ?3, ?4)",
-                        params![zone_id, algorithm, pkcs8, now()],
-                    )?;
-                }
-            } else {
-                tx.execute("DELETE FROM zone_keys WHERE zone_id=?1", [zone_id])?;
-            }
-            tx.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// The zone's signing key, if any.
-    pub async fn zone_key(&self, zone_id: i64) -> Result<Option<ZoneKey>, DbError> {
-        self.run(move |c| {
-            Ok(c.query_row(
-                "SELECT algorithm, private_key FROM zone_keys WHERE zone_id=?1 ORDER BY id LIMIT 1",
-                [zone_id],
-                |r| {
-                    Ok(ZoneKey {
-                        algorithm: r.get(0)?,
-                        private_key: r.get::<_, Vec<u8>>(1)?.into(),
-                    })
-                },
-            )
-            .optional()?)
-        })
-        .await
-    }
-
-    /// Replaces the networks allowed to transfer the zone without TSIG.
-    pub async fn set_axfr_allow_from(
-        &self,
-        zone_id: i64,
-        allow_from: Vec<String>,
-    ) -> Result<(), DbError> {
-        self.run(move |c| {
-            let changed = c.execute(
-                "UPDATE zones SET axfr_allow_from=?1 WHERE id=?2",
-                params![scope_json(&allow_from), zone_id],
-            )?;
-            if changed == 0 {
+            if c.execute("DELETE FROM zones WHERE id=?1", [zone_id])? == 0 {
                 return Err(DbError::NotFound("zone"));
             }
             Ok(())
@@ -374,76 +141,135 @@ impl Db {
         .await
     }
 
-    /// The zone's TSIG keys ordered by name.
-    pub async fn tsig_keys(&self, zone_id: i64) -> Result<Vec<TsigKey>, DbError> {
+    /// Marks a zone active after a successful check (or an exemption) and clears any snapshot.
+    pub async fn activate_zone(&self, zone_id: i64, exempt: bool) -> Result<Zone, DbError> {
         self.run(move |c| {
-            let rows = c
-                .prepare(
-                    "SELECT name, algorithm, secret, created_at FROM tsig_keys WHERE zone_id=?1 ORDER BY name",
-                )?
-                .query_map([zone_id], |r| {
-                    Ok(TsigKey {
-                        name: r.get(0)?,
-                        algorithm: r.get(1)?,
-                        secret: r.get::<_, Vec<u8>>(2)?.into(),
-                        created_at: r.get(3)?,
-                    })
-                })?
-                .collect::<Result<_, _>>()?;
-            Ok(rows)
+            let n = c.execute(
+                "UPDATE zones SET active=1, exempt=?2, verified_at=?3, last_check=?3, last_error=NULL,
+                    failed_checks=0, snapshot=NULL WHERE id=?1",
+                params![zone_id, exempt, now()],
+            )?;
+            if n == 0 {
+                return Err(DbError::NotFound("zone"));
+            }
+            zone_by_id(c, zone_id)
         })
         .await
     }
 
-    /// Stores a TSIG key; names are unique per zone.
-    pub async fn add_tsig_key(
+    /// Records a failed delegation check; returns the updated zone.
+    pub async fn record_zone_check_failure(
         &self,
         zone_id: i64,
-        name: &str,
-        algorithm: &str,
-        secret: Vec<u8>,
-    ) -> Result<(), DbError> {
-        let (name, algorithm) = (normalize(name), algorithm.to_owned());
+        error: &str,
+    ) -> Result<Zone, DbError> {
+        let error = error.to_owned();
         self.run(move |c| {
-            match c.execute(
-                "INSERT INTO tsig_keys (zone_id, name, algorithm, secret, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![zone_id, name, algorithm, secret, now()],
-            ) {
-                Ok(_) => Ok(()),
-                Err(e) if is_unique_violation(&e) => Err(DbError::Conflict("tsig key")),
-                Err(e) => Err(e.into()),
+            let n = c.execute(
+                "UPDATE zones SET last_check=?2, last_error=?3, failed_checks=failed_checks+1 WHERE id=?1",
+                params![zone_id, now(), error],
+            )?;
+            if n == 0 {
+                return Err(DbError::NotFound("zone"));
             }
+            zone_by_id(c, zone_id)
         })
         .await
     }
 
-    /// Deletes a TSIG key by name.
-    pub async fn delete_tsig_key(&self, zone_id: i64, name: &str) -> Result<(), DbError> {
-        let name = normalize(name);
+    /// Marks a zone inactive, keeping a JSON snapshot of its records for re-activation.
+    pub async fn deactivate_zone(&self, zone_id: i64, snapshot: &str) -> Result<Zone, DbError> {
+        let snapshot = snapshot.to_owned();
         self.run(move |c| {
-            let changed = c.execute(
-                "DELETE FROM tsig_keys WHERE zone_id=?1 AND name=?2",
-                params![zone_id, name],
+            let n = c.execute(
+                "UPDATE zones SET active=0, exempt=0, snapshot=?2 WHERE id=?1",
+                params![zone_id, snapshot],
             )?;
-            if changed == 0 {
-                return Err(DbError::NotFound("tsig key"));
+            if n == 0 {
+                return Err(DbError::NotFound("zone"));
+            }
+            zone_by_id(c, zone_id)
+        })
+        .await
+    }
+
+    /// Clears the exemption of an active zone so it is re-checked like any other.
+    pub async fn clear_zone_exemption(&self, zone_id: i64) -> Result<Zone, DbError> {
+        self.run(move |c| {
+            let n = c.execute(
+                "UPDATE zones SET exempt=0, failed_checks=0 WHERE id=?1",
+                [zone_id],
+            )?;
+            if n == 0 {
+                return Err(DbError::NotFound("zone"));
+            }
+            zone_by_id(c, zone_id)
+        })
+        .await
+    }
+
+    /// The record snapshot stored when a zone was deactivated.
+    pub async fn zone_snapshot(&self, zone_id: i64) -> Result<Option<String>, DbError> {
+        self.run(move |c| {
+            Ok(
+                c.query_row("SELECT snapshot FROM zones WHERE id=?1", [zone_id], |r| {
+                    r.get(0)
+                })
+                .optional()?
+                .flatten(),
+            )
+        })
+        .await
+    }
+
+    /// Zones of a version 3 database that still have to be imported into `PowerDNS`;
+    /// empty once the schema is at version 4.
+    pub async fn legacy_zones(&self) -> Result<Vec<LegacyZone>, DbError> {
+        self.run(|c| {
+            if crate::schema::version(c)? != 3 {
+                return Ok(Vec::new());
+            }
+            let zones: Vec<(i64, i64, String, bool, String, String)> = c
+                .prepare(
+                    "SELECT id, user_id, name, dnssec_enabled, nsec_mode, axfr_allow_from FROM zones ORDER BY name",
+                )?
+                .query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                })?
+                .collect::<Result<_, _>>()?;
+            let mut out = Vec::with_capacity(zones.len());
+            for (id, user_id, name, dnssec, nsec_mode, allow_from) in zones {
+                let records = c
+                    .prepare("SELECT name, rtype, ttl, rdata FROM records WHERE zone_id=?1 ORDER BY id")?
+                    .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<Result<_, _>>()?;
+                let tsig_keys = c
+                    .prepare("SELECT name, algorithm, secret FROM tsig_keys WHERE zone_id=?1 ORDER BY id")?
+                    .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<Result<_, _>>()?;
+                out.push(LegacyZone {
+                    user_id,
+                    name,
+                    dnssec,
+                    nsec3: nsec_mode == "nsec3",
+                    axfr_allow_from: parse_list(&allow_from),
+                    records,
+                    tsig_keys,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Finishes the version 3 → 4 upgrade once every legacy zone exists in `PowerDNS`.
+    pub async fn complete_import(&self) -> Result<(), DbError> {
+        self.run(|c| {
+            if crate::schema::version(c)? == 3 {
+                crate::schema::upgrade_3_to_4(c)?;
             }
             Ok(())
         })
         .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn serial_is_monotonic() {
-        let now = u32::try_from(now()).unwrap_or(u32::MAX);
-        assert!(next_serial(0) >= now);
-        assert_eq!(next_serial(u32::MAX - 1), u32::MAX);
-        let ahead = now + 1000;
-        assert_eq!(next_serial(ahead), ahead + 1);
     }
 }

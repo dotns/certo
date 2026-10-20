@@ -1,13 +1,13 @@
-//! Hosted zones: `/api/zones` for owners and `/admin/zones` for operators.
+//! Hosted zones: `/api/zones` for owners and `/admin/zones` for operators. Records live in
+//! `PowerDNS` and are exposed as rrsets.
 use axum::{
     Json,
     extract::{FromRequestParts, Path, RawPathParams, State},
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
-use certo_core::{Zone, ZoneRecord};
-use certo_dns::{DnssecInfo, RecordInput, TransferInfo, TsigKeyInfo, ZoneOpError, parse_zone_name};
+use certo_core::Zone;
+use certo_pdns::{DnssecInfo, RrSet, RrSetChange, TransferInfo, TsigKeyInfo, ZoneOpError};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -19,21 +19,24 @@ use crate::{
 impl From<ZoneOpError> for ApiError {
     fn from(e: ZoneOpError) -> Self {
         match &e {
-            ZoneOpError::Record(r) => Self::bad_request(r.code()).with_message(r.to_string()),
+            ZoneOpError::Invalid { code, message } => {
+                Self::bad_request(code).with_message(message.clone())
+            }
             ZoneOpError::NotAllowed(why) => Self::forbidden("zone_not_allowed").with_message(*why),
             ZoneOpError::Exists => Self::new(StatusCode::CONFLICT, "zone_already_exists"),
-            ZoneOpError::NotFound("record") => Self::new(StatusCode::NOT_FOUND, "record_not_found"),
             ZoneOpError::NotFound("tsig key") => {
                 Self::new(StatusCode::NOT_FOUND, "tsig_key_not_found")
             }
             ZoneOpError::NotFound(_) => Self::new(StatusCode::NOT_FOUND, "zone_not_found"),
-            ZoneOpError::Invalid { code, message } => {
-                Self::bad_request(code).with_message(message.clone())
+            ZoneOpError::NotActive => Self::new(StatusCode::CONFLICT, "zone_not_active")
+                .with_message("the zone is served once its delegation is verified"),
+            ZoneOpError::RateLimited => {
+                Self::new(StatusCode::TOO_MANY_REQUESTS, "check_rate_limited")
             }
-            ZoneOpError::Db(_)
-            | ZoneOpError::Build(_)
-            | ZoneOpError::Dnssec(_)
-            | ZoneOpError::Task => {
+            ZoneOpError::Check(why) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, "check_failed").with_message(why.clone())
+            }
+            ZoneOpError::Db(_) | ZoneOpError::Pdns(_) => {
                 tracing::error!(error = %e, "zone operation failed");
                 Self::internal("zone_error")
             }
@@ -44,79 +47,67 @@ impl From<ZoneOpError> for ApiError {
 #[derive(Serialize)]
 pub(crate) struct ZoneView {
     name: String,
-    serial: u32,
-    dnssec: bool,
+    status: &'static str,
+    exempt: bool,
+    system: bool,
+    verified_at: Option<i64>,
+    last_check: Option<i64>,
+    last_error: Option<String>,
+    failed_checks: u32,
     created_at: i64,
+    ns_target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    records: Option<Vec<RecordView>>,
+    rrsets: Option<Vec<RrSetView>>,
 }
 
 impl ZoneView {
-    fn new(z: Zone, with_owner: bool) -> Self {
+    fn new(state: &AppState, z: Zone, with_owner: bool) -> Self {
         Self {
             name: z.name,
-            serial: z.serial,
-            dnssec: z.dnssec,
+            status: if z.active { "active" } else { "pending" },
+            exempt: z.exempt,
+            system: z.user_id.is_none(),
+            verified_at: z.verified_at,
+            last_check: z.last_check,
+            last_error: z.last_error,
+            failed_checks: z.failed_checks,
             created_at: z.created_at,
+            ns_target: state.zones.policy().nsname.clone(),
             owner: z.owner.filter(|_| with_owner),
-            records: None,
+            rrsets: None,
         }
     }
 }
 
 #[derive(Serialize)]
-pub(crate) struct RecordView {
-    id: i64,
+pub(crate) struct RrSetView {
     name: String,
     #[serde(rename = "type")]
     rtype: String,
     ttl: u32,
-    data: String,
+    records: Vec<String>,
 }
 
-impl From<ZoneRecord> for RecordView {
-    fn from(r: ZoneRecord) -> Self {
+impl From<RrSet> for RrSetView {
+    fn from(rr: RrSet) -> Self {
         Self {
-            id: r.id,
-            name: r.name,
-            rtype: r.rtype,
-            ttl: r.ttl,
-            data: r.data,
+            name: rr.name,
+            rtype: rr.rtype,
+            ttl: rr.ttl,
+            records: rr.records.into_iter().map(|r| r.content).collect(),
         }
     }
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct RecordRequest {
-    name: String,
-    #[serde(rename = "type")]
-    rtype: String,
-    ttl: Option<u32>,
-    data: String,
-}
-
-impl RecordRequest {
-    fn input(&self) -> RecordInput<'_> {
-        RecordInput {
-            name: &self.name,
-            rtype: &self.rtype,
-            ttl: self.ttl,
-            data: &self.data,
-        }
-    }
-}
-
-fn record_id(id: &str) -> ApiResult<i64> {
-    id.parse()
-        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "record_not_found"))
+fn rrset_views(rrsets: Vec<RrSet>) -> Vec<RrSetView> {
+    rrsets.into_iter().map(Into::into).collect()
 }
 
 /// The zone named in the path, authorized for the caller: `/admin/...` routes need the
 /// admin key, the others a session or key of the owner whose scope covers the zone.
-/// Other users' zones are reported as missing.
+/// Other users' zones (and the base zone) are reported as missing.
 #[derive(Debug)]
 pub(crate) struct ZoneCtx {
     zone: Zone,
@@ -142,7 +133,7 @@ impl FromRequestParts<AppState> for ZoneCtx {
         }
         let auth = Bearer::from_request_parts(parts, state).await?;
         let zone = state.zones.get(&name).await?;
-        if zone.user_id != auth.user.id {
+        if zone.user_id != Some(auth.user.id) {
             return Err(not_found());
         }
         if !auth.may_access(&zone.name) {
@@ -172,7 +163,7 @@ pub(crate) async fn list(
         zones
             .into_iter()
             .filter(|z| auth.may_access(&z.name))
-            .map(|z| ZoneView::new(z, false))
+            .map(|z| ZoneView::new(&state, z, false))
             .collect(),
     ))
 }
@@ -182,17 +173,17 @@ pub(crate) async fn create(
     auth: Bearer,
     JsonBody(req): JsonBody<CreateZone>,
 ) -> ApiResult<Response> {
-    if !state.opts.allow_zone_creation {
-        return Err(ApiError::forbidden("zone_creation_disabled"));
-    }
-    let name = parse_zone_name(&req.name).map_err(ZoneOpError::from)?;
-    let name = name.to_string();
-    if !auth.may_access(name.trim_end_matches('.')) {
+    let name = certo_pdns::parse_zone_name(&req.name)?;
+    if !auth.may_access(&name) {
         return Err(ApiError::forbidden("domain_not_in_scope"));
     }
-    let zone = state.zones.create(auth.user.id, &name).await?;
-    tracing::info!(user = %auth.user.username, zone = %zone.name, "zone created");
-    Ok((StatusCode::CREATED, Json(ZoneView::new(zone, false))).into_response())
+    let zone = state.zones.create(Some(auth.user.id), &name).await?;
+    tracing::info!(user = %auth.user.username, zone = %zone.name, active = zone.active, "zone created");
+    Ok((
+        StatusCode::CREATED,
+        Json(ZoneView::new(&state, zone, false)),
+    )
+        .into_response())
 }
 
 pub(crate) async fn admin_list(
@@ -205,7 +196,10 @@ pub(crate) async fn admin_list(
         .await
         .map_err(|e| ApiError::db("admin list zones", &e))?;
     Ok(Json(
-        zones.into_iter().map(|z| ZoneView::new(z, true)).collect(),
+        zones
+            .into_iter()
+            .map(|z| ZoneView::new(&state, z, true))
+            .collect(),
     ))
 }
 
@@ -222,17 +216,37 @@ pub(crate) async fn admin_create(
         .user_by_id(req.user_id)
         .await
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "user_not_found"))?;
-    let zone = state.zones.create(user.id, &req.name).await?;
+    let zone = state.zones.create(Some(user.id), &req.name).await?;
     tracing::info!(user = %user.username, zone = %zone.name, "zone created by admin");
-    Ok((StatusCode::CREATED, Json(ZoneView::new(zone, true))).into_response())
+    Ok((StatusCode::CREATED, Json(ZoneView::new(&state, zone, true))).into_response())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ActivationRequest {
+    exempt: bool,
+}
+
+/// `PUT /admin/zones/{zone}/activation`: exempt a zone from the delegation check (or not).
+pub(crate) async fn set_activation(
+    State(state): State<AppState>,
+    ctx: ZoneCtx,
+    JsonBody(req): JsonBody<ActivationRequest>,
+) -> ApiResult<Json<ZoneView>> {
+    let zone = state.zones.set_exempt(&ctx.zone, req.exempt).await?;
+    tracing::info!(zone = %zone.name, exempt = req.exempt, "zone activation changed by admin");
+    Ok(Json(ZoneView::new(&state, zone, true)))
 }
 
 // --- Per-zone endpoints, mounted under both /api/zones and /admin/zones ---
 
 pub(crate) async fn get(State(state): State<AppState>, ctx: ZoneCtx) -> ApiResult<Json<ZoneView>> {
-    let records = state.zones.records(&ctx.zone).await?;
-    let mut view = ZoneView::new(ctx.zone, ctx.admin);
-    view.records = Some(records.into_iter().map(Into::into).collect());
+    let rrsets = if ctx.zone.active {
+        Some(rrset_views(state.zones.rrsets(&ctx.zone).await?))
+    } else {
+        None
+    };
+    let mut view = ZoneView::new(&state, ctx.zone, ctx.admin);
+    view.rrsets = rrsets;
     Ok(Json(view))
 }
 
@@ -242,46 +256,36 @@ pub(crate) async fn delete(State(state): State<AppState>, ctx: ZoneCtx) -> ApiRe
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(crate) async fn list_records(
+/// `POST .../verify`: run the delegation check now.
+pub(crate) async fn verify(
     State(state): State<AppState>,
     ctx: ZoneCtx,
-) -> ApiResult<Json<Vec<RecordView>>> {
-    let records = state.zones.records(&ctx.zone).await?;
-    Ok(Json(records.into_iter().map(Into::into).collect()))
+) -> ApiResult<Json<ZoneView>> {
+    let zone = state.zones.verify(&ctx.zone).await?;
+    Ok(Json(ZoneView::new(&state, zone, ctx.admin)))
 }
 
-pub(crate) async fn add_record(
+pub(crate) async fn list_rrsets(
     State(state): State<AppState>,
     ctx: ZoneCtx,
-    JsonBody(req): JsonBody<RecordRequest>,
-) -> ApiResult<Response> {
-    let rec = state.zones.add_record(&ctx.zone, req.input()).await?;
-    Ok((StatusCode::CREATED, Json(RecordView::from(rec))).into_response())
+) -> ApiResult<Json<Vec<RrSetView>>> {
+    Ok(Json(rrset_views(state.zones.rrsets(&ctx.zone).await?)))
 }
 
-pub(crate) async fn update_record(
-    State(state): State<AppState>,
-    ctx: ZoneCtx,
-    Path((_, id)): Path<(String, String)>,
-    JsonBody(req): JsonBody<RecordRequest>,
-) -> ApiResult<Json<RecordView>> {
-    let rec = state
-        .zones
-        .update_record(&ctx.zone, record_id(&id)?, req.input())
-        .await?;
-    Ok(Json(rec.into()))
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct PatchRequest {
+    rrsets: Vec<RrSetChange>,
 }
 
-pub(crate) async fn delete_record(
+/// `PATCH .../rrsets`: REPLACE or DELETE whole rrsets; answers with the zone's rrsets.
+pub(crate) async fn patch_rrsets(
     State(state): State<AppState>,
     ctx: ZoneCtx,
-    Path((_, id)): Path<(String, String)>,
-) -> ApiResult<StatusCode> {
-    state
-        .zones
-        .delete_record(&ctx.zone, record_id(&id)?)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
+    JsonBody(req): JsonBody<PatchRequest>,
+) -> ApiResult<Json<Vec<RrSetView>>> {
+    state.zones.patch_rrsets(&ctx.zone, &req.rrsets).await?;
+    Ok(Json(rrset_views(state.zones.rrsets(&ctx.zone).await?)))
 }
 
 #[derive(Serialize)]
@@ -290,8 +294,8 @@ pub(crate) struct DnssecView {
     nsec_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     dnskey: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ds: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ds: Vec<String>,
 }
 
 impl From<DnssecInfo> for DnssecView {
@@ -341,7 +345,6 @@ pub(crate) async fn set_dnssec(
 pub(crate) struct TsigKeyView {
     name: String,
     algorithm: String,
-    created_at: i64,
     /// Base64 secret, only in the creation response.
     #[serde(skip_serializing_if = "Option::is_none")]
     secret: Option<String>,
@@ -352,7 +355,6 @@ impl From<TsigKeyInfo> for TsigKeyView {
         Self {
             name: k.name,
             algorithm: k.algorithm,
-            created_at: k.created_at,
             secret: None,
         }
     }
@@ -416,7 +418,7 @@ pub(crate) async fn add_tsig_key(
         .add_tsig_key(&ctx.zone, &req.name, algorithm)
         .await?;
     let mut view = TsigKeyView::from(key);
-    view.secret = Some(STANDARD.encode(secret));
+    view.secret = Some(secret);
     Ok((StatusCode::CREATED, Json(view)).into_response())
 }
 

@@ -21,12 +21,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      # amd64 only until the static pdns build is verified on a native arm64 runner.
       - name: Build static binaries
         uses: docker/build-push-action@v7
         with:
           context: .
           target: binary
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           outputs: type=local,dest=out
           build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
@@ -36,9 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          for arch in amd64 arm64; do
-            tar -C "out/linux_$arch" -czf "dist/certo-linux-$arch.tar.gz" certo
-          done
+          tar -C out -czf dist/certo-linux-amd64.tar.gz certo pdns_server
           mkdir -p certo/lode/data/db certo/lode/data/logs certo/lode/data/certs
           cp config.toml certo/lode/data/config.toml
           cp lode.toml certo/lode/lode.toml

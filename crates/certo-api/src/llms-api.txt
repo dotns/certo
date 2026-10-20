@@ -83,20 +83,21 @@ Authorization: Bearer {api_key}
 ## Hosted Zones (authoritative DNS, forward and reverse)
 
 ```
-GET    /api/zones                                    → [{"name","serial","dnssec","created_at"}]
-POST   /api/zones  {"name":"23.251.162.in-addr.arpa"} → 201 (needs allow_zone_creation; else admin assigns)
-GET    /api/zones/{zone}                             → zone + "records":[{"id","name","type","ttl","data"}]
+GET    /api/zones                                    → [zone]  zone = {"name","status":"pending|active","exempt","system","verified_at","last_check","last_error","failed_checks","created_at","ns_target"}
+POST   /api/zones  {"name":"23.251.162.in-addr.arpa"} → 201 zone (pending until the parent delegates it to ns_target)
+GET    /api/zones/{zone}                             → zone + "rrsets" (active zones only)
 DELETE /api/zones/{zone}                             → 204
-POST   /api/zones/{zone}/records  {"name":"5","type":"PTR","data":"host.example.com"} → 201 record
-PUT    /api/zones/{zone}/records/{id}  {same body}   → 200 record
-DELETE /api/zones/{zone}/records/{id}                → 204
-GET|PUT /api/zones/{zone}/dnssec  {"enabled":true,"nsec_mode":"nsec|nsec3"} → {"enabled","nsec_mode","dnskey","ds"}
+POST   /api/zones/{zone}/verify                      → 200 zone (re-checks the delegation now; 429 within a minute)
+GET    /api/zones/{zone}/rrsets                      → [{"name","type","ttl","records":[...]}]
+PATCH  /api/zones/{zone}/rrsets  {"rrsets":[{"name":"5","type":"PTR","ttl":3600,"records":["host.example.com."]},{"name":"old","type":"A","changetype":"DELETE"}]} → 200 rrsets (REPLACE whole rrsets, default; DELETE removes one)
+GET|PUT /api/zones/{zone}/dnssec  {"enabled":true,"nsec_mode":"nsec|nsec3"} → {"enabled","nsec_mode","dnskey","ds":[...]}
 GET|PUT /api/zones/{zone}/axfr    {"allow_from":["192.0.2.53","2001:db8::/64"]} → {"allow_from","tsig_keys"}
 POST   /api/zones/{zone}/tsig-keys  {"name":"xfr","algorithm":"hmac-sha256"} → 201 {"name","algorithm","secret"} (secret shown once)
 DELETE /api/zones/{zone}/tsig-keys/{name}            → 204
-Admin: GET|POST /admin/zones ({"user_id","name"}), and /admin/zones/{zone}/... for any user's zone.
+Admin: GET|POST /admin/zones ({"user_id","name"}), /admin/zones/{zone}/... for any user's zone,
+       PUT /admin/zones/{zone}/activation {"exempt":true|false} (serve without a delegation check).
 ```
-Auth: Bearer JWT or API key (scoped keys only for zones inside their scope). Record names are relative (`www`, `@`) or absolute; types A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT; PTR only in in-addr.arpa/ip6.arpa zones. The parent (registrar or IP block owner) must delegate the zone to the server's nameserver; with DNSSEC on, publish the returned DS at the parent. AXFR is refused unless the source IP is allowed or the request is TSIG-signed.
+Auth: Bearer JWT or API key (scoped keys only for zones inside their scope). A zone is served (and its rrsets editable, else `409 zone_not_active`) once the parent (registrar or IP block owner) delegates it to `ns_target`; checks run hourly while pending and daily while active. Record names are relative (`www`, `@`) or absolute; types A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT; PTR only in in-addr.arpa/ip6.arpa zones; TXT records are given unquoted. With DNSSEC on, publish the returned DS at the parent. AXFR is refused unless the source IP is allowed or the request is TSIG-signed.
 
 ## Account & Profile
 

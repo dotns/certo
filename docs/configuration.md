@@ -12,16 +12,33 @@ produces a useless binding.
 
 | Key | Type | Default / when empty | Notes |
 |---|---|---|---|
-| `listen` | string | **required** | DNS listen address, e.g. `127.0.0.1:53`; `:53` binds all interfaces (IPv4 only for the `*4` protocols). Empty aborts startup |
-| `protocol` | string | **required** | `both`, `both4`, `both6`, `udp`, `udp4`, `udp6`, `tcp`, `tcp4`, `tcp6`. Empty aborts startup with `invalid protocol` |
-| `domain` | string | **required in practice** | Base domain certo is authoritative for; all records live at `<subdomain>.<domain>` |
-| `nsname` | string | **required in practice** | Name used in the zone's SOA/NS answers; also the SOA MNAME and default apex NS of hosted zones (falls back to `domain` for them) |
-| `nsadmin` | string | — | SOA admin address; `@` is written as `.` (e.g. `admin.example.com`). Hosted zones fall back to `hostmaster.<domain>` |
-| `records` | []string | empty | Static records served alongside the dynamic TXT, in zone-file syntax |
+| `listen` | string | **required** | DNS listen address handed to `pdns_server`, e.g. `127.0.0.1:53`; `:53` binds all interfaces. Empty aborts startup |
+| `protocol` | string | — | Ignored since PowerDNS always serves UDP and TCP; accepted so older config files keep loading |
+| `domain` | string | **required in practice** | Base domain (the base zone); challenge records live at `<subdomain>.<domain>` |
+| `nsname` | string | **required in practice** | Nameserver name: SOA MNAME and apex NS of the base zone and of every hosted zone, and the target a hosted zone must be delegated to (`ns_target` in `GET /api/info`) |
+| `nsadmin` | string | — | SOA admin address; `@` is written as `.` (e.g. `admin.example.com`) |
+| `records` | []string | empty | Records seeded into the base zone **when it is first created** (zone-file syntax, inside the base domain). Later changes are made through the admin zone API, not by editing this list |
 | `debug` | bool | `false` | Accepted for compatibility; use `logconfig.loglevel = "debug"` for verbose logs |
 
 `domain` and `nsname` are not validated at load time, but nothing resolves correctly
 without them.
+
+## `[pdns]`
+
+certo starts and supervises the bundled PowerDNS Authoritative server; these keys say where
+to find it and where its state lives.
+
+| Key | Type | Default / when empty | Notes |
+|---|---|---|---|
+| `binary` | string | `pdns_server` next to the certo executable | Path of the `pdns_server` executable |
+| `dir` | string | `data/pdns` | Directory for the generated `pdns.conf`, the PowerDNS SQLite database (`pdns.sqlite3`) and its control socket. Created with mode `0700` |
+| `api_port` | u16 | `8081` | Port of the PowerDNS HTTP API, bound to `127.0.0.1` only. The API key is random per start |
+
+## `[zones]`
+
+| Key | Type | Default / when empty | Notes |
+|---|---|---|---|
+| `resolver` | string | system resolver (`/etc/resolv.conf`), fallback `1.1.1.1:53` | Recursive resolver (`host:port`) used to find a zone's parent nameservers for the delegation check |
 
 ## `[database]`
 
@@ -52,7 +69,7 @@ without them.
 | `jwt_secret` | string | random per process | HS256 signing key for dashboard JWTs. **When empty, a new random secret is generated at each start, so all existing sessions become invalid on restart and replicas cannot share sessions** — set it for stable/scaled deployments. certo logs a warning at startup when it is empty |
 | `admin_key` | string | empty ⇒ admin API disabled | Value expected in `X-Admin-Key`. While empty, every `/admin/*` request returns `403 admin_key_not_configured`. Compared in constant time |
 | `allow_registration` | bool | `true` | When `false`, `POST /api/register` and the anonymous acme-dns `POST /register` return `403 registration_disabled`. Existing accounts, login, and all protocol traffic keep working — use it to lock a private deployment to pre-created accounts |
-| `allow_zone_creation` | bool | `false` | Lets users create hosted zones themselves (`POST /api/zones`). When `false`, only the admin API (`POST /admin/zones`) creates zones; users still manage records of zones assigned to them |
+| `allow_zone_creation` | bool | — | Ignored (every user may create zones; a zone is served only once its delegation is verified or an admin exempts it, see [architecture.md](architecture.md#zone-activation)). Accepted so older config files keep loading |
 
 ## `[logconfig]`
 
@@ -85,7 +102,6 @@ see [architecture.md](architecture.md#authorization-model).
 ```toml
 [general]
 listen = "0.0.0.0:53"
-protocol = "both"
 domain = "s.example.com"
 nsname = "s.example.com"
 nsadmin = "admin.example.com"
@@ -97,6 +113,9 @@ records = [
 [database]
 engine = "sqlite"
 connection = "data/db/certo.db"
+
+[pdns]
+dir = "data/pdns"
 
 [api]
 ip = "0.0.0.0"

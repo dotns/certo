@@ -52,6 +52,41 @@ pub struct Config {
     pub api: Api,
     /// `[logconfig]`
     pub logconfig: LogConfig,
+    /// `[pdns]`
+    pub pdns: Pdns,
+    /// `[zones]`
+    pub zones: ZonesConfig,
+}
+
+/// `[pdns]`: the supervised `pdns_server` process.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Pdns {
+    /// `pdns_server` executable; empty means next to the certo executable.
+    pub binary: String,
+    /// Directory for the `pdns_server` config, database and control socket (default `data/pdns`).
+    pub dir: String,
+    /// Port of the pdns HTTP API on `127.0.0.1`.
+    pub api_port: u16,
+}
+
+impl Default for Pdns {
+    fn default() -> Self {
+        Self {
+            binary: String::new(),
+            dir: String::new(),
+            api_port: 8081,
+        }
+    }
+}
+
+/// `[zones]`: hosted zone activation.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ZonesConfig {
+    /// Recursive resolver (`host:port`) used for delegation checks; empty uses the system
+    /// resolver.
+    pub resolver: String,
 }
 
 /// `[general]`: DNS listener and base zone.
@@ -120,8 +155,6 @@ pub struct Api {
     pub admin_key: String,
     /// Open registration (dashboard and acme-dns `/register`); defaults to true.
     pub allow_registration: Option<bool>,
-    /// Let users create hosted zones themselves; admins always can. Defaults to false.
-    pub allow_zone_creation: bool,
 }
 
 impl Api {

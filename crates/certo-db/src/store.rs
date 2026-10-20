@@ -184,6 +184,30 @@ impl Db {
         .map_err(|_| DbError::Worker)?
     }
 
+    /// Stored schema version (3 while zones still await their import into `PowerDNS`).
+    pub async fn schema_version(&self) -> Result<u32, DbError> {
+        self.run(|c| schema::version(c)).await
+    }
+
+    /// Every challenge name with its current TXT values.
+    pub async fn txt_by_domain(&self) -> Result<Vec<(String, Vec<String>)>, DbError> {
+        self.run(|c| {
+            let mut stmt = c.prepare("SELECT Domain, Value FROM txt ORDER BY Domain, rowid")?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let mut out: Vec<(String, Vec<String>)> = Vec::new();
+            for row in rows {
+                let (domain, value) = row?;
+                match out.last_mut() {
+                    Some((d, values)) if *d == domain => values.push(value),
+                    _ => out.push((domain, vec![value])),
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     /// Checks that the database answers queries.
     pub async fn ping(&self) -> Result<(), DbError> {
         self.run(|c| Ok(c.query_row("SELECT 1", [], |_| Ok(()))?))
@@ -401,7 +425,12 @@ impl Db {
     }
 
     /// Deletes a user with their keys, domains (and their challenge TXT values) and zones.
-    pub async fn delete_user(&self, user_id: i64, base_domain: &str) -> Result<(), DbError> {
+    /// Returns the internal challenge names whose TXT values were removed.
+    pub async fn delete_user(
+        &self,
+        user_id: i64,
+        base_domain: &str,
+    ) -> Result<Vec<String>, DbError> {
         let base_domain = base_domain.to_owned();
         self.run(move |c| {
             let tx = c.transaction()?;
@@ -417,7 +446,10 @@ impl Db {
             tx.execute("DELETE FROM user_domains WHERE user_id=?1", [user_id])?;
             tx.execute("DELETE FROM users WHERE id=?1", [user_id])?;
             tx.commit()?;
-            Ok(())
+            Ok(subdomains
+                .iter()
+                .map(|s| internal_domain(s, &base_domain))
+                .collect())
         })
         .await
     }
@@ -466,13 +498,14 @@ impl Db {
         .await
     }
 
-    /// Removes a user's domain together with its challenge TXT values.
+    /// Removes a user's domain together with its challenge TXT values; returns the
+    /// internal challenge name when the domain existed.
     pub async fn remove_user_domain(
         &self,
         user_id: i64,
         domain: &str,
         base_domain: &str,
-    ) -> Result<(), DbError> {
+    ) -> Result<Option<String>, DbError> {
         let (domain, base_domain) = (normalize(domain), base_domain.to_owned());
         self.run(move |c| {
             let tx = c.transaction()?;
@@ -483,15 +516,15 @@ impl Db {
                     |r| r.get(0),
                 )
                 .optional()?;
-            if let Some(subdomain) = subdomain {
-                delete_subdomain_txt(&tx, &subdomain, &base_domain)?;
+            if let Some(subdomain) = &subdomain {
+                delete_subdomain_txt(&tx, subdomain, &base_domain)?;
                 tx.execute(
                     "DELETE FROM user_domains WHERE user_id=?1 AND domain=?2",
                     params![user_id, domain],
                 )?;
             }
             tx.commit()?;
-            Ok(())
+            Ok(subdomain.map(|s| internal_domain(&s, &base_domain)))
         })
         .await
     }

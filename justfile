@@ -2,7 +2,7 @@ set dotenv-load
 
 # Build frontend
 web-build:
-    cd web && npx vite build
+    cd web && bun install --frozen-lockfile && bun run build
 
 version := `git describe --tags --always --dirty 2>/dev/null || echo dev`
 
@@ -16,15 +16,19 @@ build: web-build
 test:
     cargo nextest run --workspace --locked
 
+# Build the static pdns_server next to the debug certo binary (needs docker)
+pdns-build:
+    docker buildx build --target pdns-binary --output type=local,dest=target/debug .
+
 # Run the e2e suite against a debug build
-e2e:
+e2e: pdns-build
     cargo build --locked -p certo
     cd tests/e2e && CERTO_BIN={{justfile_directory()}}/target/debug/certo bun test
 
 # Start dev server (frontend + backend on same domain via nsl path prefix)
 dev: build
     #!/usr/bin/env bash
-    cd web && nsl run -n certo npx vite &
+    cd web && bun run dev &
     FRONTEND_PID=$!
     nsl run -n certo:/api dist/certo -c config.toml &
     BACKEND_PID=$!
@@ -45,7 +49,7 @@ clean:
 lint:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked
-    cd web && npx tsc --noEmit
+    cd web && bun run lint && bun run typecheck
 
 # Rust quality gates
 rs-ci:

@@ -1,15 +1,21 @@
-import { defineConfig } from 'vite'
+import tailwindcss from '@tailwindcss/vite'
+import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    tanstackRouter({
+      target: 'react',
+      routesDirectory: 'src/app/routes',
+      generatedRouteTree: 'src/app/routeTree.gen.ts',
+      autoCodeSplitting: true,
+    }),
+    react(),
+    tailwindcss(),
+  ],
+  resolve: { tsconfigPaths: true },
   server: {
-    allowedHosts: true,
-    proxy: {
-      '/api': 'http://localhost:8080',
-      '/present': 'http://localhost:8080',
-      '/cleanup': 'http://localhost:8080',
-      '/health': 'http://localhost:8080',
-    },
+    host: '0.0.0.0',
   },
 })

@@ -19,7 +19,7 @@ anyhow             = { workspace = true }
 certo-api          = { workspace = true }
 certo-core         = { workspace = true }
 certo-db           = { workspace = true }
-certo-dns          = { workspace = true }
+certo-pdns         = { workspace = true }
 clap               = { workspace = true }
 rlimit             = { workspace = true }
 rustix             = { workspace = true }

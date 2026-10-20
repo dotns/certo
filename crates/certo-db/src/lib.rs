@@ -7,4 +7,4 @@ mod zones;
 
 pub use schema::DB_VERSION;
 pub use store::{Db, DbError};
-pub use zones::NewRecord;
+pub use zones::LegacyZone;

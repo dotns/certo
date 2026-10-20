@@ -42,6 +42,10 @@ export interface Server {
   dnsPort: number;
   baseDomain: string;
   adminKey: string;
+  /** Data directory holding `certo.db` and `pdns/`. */
+  dir: string;
+  /** Stops certo (and with it pdns) and starts it again on the same data and ports. */
+  restart(): Promise<void>;
   stop(): void;
 }
 
@@ -52,9 +56,30 @@ export interface StartOpts {
   adminKey?: string;
 }
 
+/** Spawns certo and waits for `/health`; the binary starts `pdns_server` from beside itself. */
+async function spawnCerto(bin: string, cfgPath: string, dir: string, apiBase: string) {
+  const proc = Bun.spawn([bin, "-c", cfgPath], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (proc.exitCode !== null) break;
+    try {
+      const r = await fetch(`${apiBase}/health`);
+      if (r.ok) return proc;
+    } catch {
+      // not up yet
+    }
+    await Bun.sleep(150);
+  }
+  proc.kill();
+  const err = await new Response(proc.stderr).text().catch(() => "");
+  const out = await new Response(proc.stdout).text().catch(() => "");
+  throw new Error(`certo did not become ready on ${apiBase}\n${out}${err}`);
+}
+
 export async function startServer(opts: StartOpts = {}): Promise<Server> {
   const apiPort = opts.apiPort ?? (await freePort());
   const dnsPort = opts.dnsPort ?? (await freePort());
+  const pdnsApiPort = await freePort();
   const baseDomain = opts.baseDomain ?? "s.example.test";
   const adminKey = opts.adminKey ?? "e2e-admin-key";
 
@@ -63,7 +88,6 @@ export async function startServer(opts: StartOpts = {}): Promise<Server> {
   const config = [
     "[general]",
     `listen = "127.0.0.1:${dnsPort}"`,
-    `protocol = "both"`,
     `domain = "${baseDomain}"`,
     `nsname = "${baseDomain}"`,
     `nsadmin = "admin.${baseDomain}"`,
@@ -73,13 +97,21 @@ export async function startServer(opts: StartOpts = {}): Promise<Server> {
     `engine = "sqlite"`,
     `connection = "${join(dir, "certo.db")}"`,
     "",
+    "[pdns]",
+    `dir = "${join(dir, "pdns")}"`,
+    `api_port = ${pdnsApiPort}`,
+    "",
+    "[zones]",
+    // Delegation checks go to our own pdns, which refuses unknown names: every check is
+    // inconclusive, so zones stay pending until an admin exempts them.
+    `resolver = "127.0.0.1:${dnsPort}"`,
+    "",
     "[api]",
     `ip = "127.0.0.1"`,
     `port = "${apiPort}"`,
     `tls = "none"`,
     `jwt_secret = "e2e-secret"`,
     `admin_key = "${adminKey}"`,
-    `allow_zone_creation = true`,
     "",
     "[logconfig]",
     `loglevel = "warn"`,
@@ -89,32 +121,20 @@ export async function startServer(opts: StartOpts = {}): Promise<Server> {
   ].join("\n");
   const cfgPath = join(dir, "config.toml");
   writeFileSync(cfgPath, config);
-
-  const proc = Bun.spawn([bin, "-c", cfgPath], { cwd: dir, stdout: "pipe", stderr: "pipe" });
   const apiBase = `http://127.0.0.1:${apiPort}`;
-
-  const deadline = Date.now() + 20_000;
-  let ready = false;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(`${apiBase}/health`);
-      if (r.ok) { ready = true; break; }
-    } catch {
-      // not up yet
-    }
-    await Bun.sleep(150);
-  }
-  if (!ready) {
-    proc.kill();
-    const err = await new Response(proc.stderr).text().catch(() => "");
-    throw new Error(`certo did not become ready on ${apiBase}\n${err}`);
-  }
+  let proc = await spawnCerto(bin, cfgPath, dir, apiBase);
 
   return {
     apiBase,
     dnsPort,
     baseDomain,
     adminKey,
+    dir,
+    async restart() {
+      proc.kill();
+      await proc.exited;
+      proc = await spawnCerto(bin, cfgPath, dir, apiBase);
+    },
     stop() {
       try { proc.kill(); } catch { /* already gone */ }
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }

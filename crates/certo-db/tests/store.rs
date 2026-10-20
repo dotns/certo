@@ -42,8 +42,9 @@ async fn fresh_database_has_current_schema() {
     assert_eq!(version(&path), DB_VERSION.to_string());
     assert!(columns(&path, "user_domains").contains(&"allowfrom".to_owned()));
     assert!(!columns(&path, "users").contains(&"api_key".to_owned()));
-    for table in ["zones", "records", "zone_keys", "tsig_keys"] {
-        assert!(!columns(&path, table).is_empty(), "{table}");
+    assert!(columns(&path, "zones").contains(&"exempt".to_owned()));
+    for table in ["records", "zone_keys", "tsig_keys"] {
+        assert!(columns(&path, table).is_empty(), "{table}");
     }
 
     // Reopening is a no-op.
@@ -394,9 +395,9 @@ async fn reads_and_extends_database_written_by_go() {
     let added = db.create_user("rustuser", "h").await.unwrap();
     assert!(added.id > user.id);
     assert_eq!(version(&path), DB_VERSION.to_string());
-    // The v2 -> v3 upgrade added the zone tables.
+    // The upgrade added the zones table.
     let zone = db
-        .create_zone(user.id, "go.example.com", vec![])
+        .create_zone(Some(user.id), "go.example.com")
         .await
         .unwrap();
     assert_eq!(zone.owner.as_deref(), Some("gouser"));

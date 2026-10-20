@@ -15,11 +15,12 @@
 - **多级 API Key（带 scope）** — 全局(`*`)、通配(`*.example.com`)、精确 scope;通配/全局 key 可按需自动创建域名,精确 scope 仅更新已有
 - **来源 IP 白名单** — acme-dns 注册可带 `allowfrom` CIDR,限制允许 `/update` 的来源
 - **管理接口** — `X-Admin-Key` 管理全部用户、域名、记录
-- **托管 Zone** — 每个用户可托管权威正向/反向 zone(如 `23.251.162.in-addr.arpa`):A、AAAA、CAA、CNAME、MX、NS、PTR、SRV、TXT,可选 DNSSEC(NSEC/NSEC3,提供给上级的 DS)与 AXFR 区域传送(IP 白名单或 TSIG)
-- **Web 控制台** — 内嵌 React SPA(单二进制),管理域名与 zone、查看 CNAME/TXT、复制客户端配置
+- **托管 Zone** — 每个用户可托管权威正向/反向 zone(如 `23.251.162.in-addr.arpa`):A、AAAA、CAA、CNAME、MX、NS、PTR、SRV、TXT,可选 DNSSEC(NSEC/NSEC3,提供给上级的 DS)与 AXFR 区域传送(IP 白名单或 TSIG)。zone 在上级将其委派到 certo 的 nameserver 后才会被解析(管理员可豁免)
+- **PowerDNS 数据面** — 所有 DNS 应答由内置的静态 [PowerDNS Authoritative](https://www.powerdns.com/powerdns-authoritative-server) 提供,certo 负责启动、配置并通过其 API 驱动
+- **Web 控制台** — 内嵌 React SPA,管理域名、密钥与 zone、查看 CNAME/TXT、复制客户端配置;管理员区域可管理用户与全部 zone
 - **SQLite 存储** — 单个本地数据库文件
-- **单个静态二进制** — Rust(hickory-dns + axum),仅使用 rustls
-- **静态发布** — `linux/amd64` + `linux/arm64` 静态二进制，由 [lode](https://github.com/bkhq/lode) 运行并自动更新
+- **SQLite 存储** — certo 自己的数据库加 PowerDNS 的数据库,都是 `data/` 下的本地文件
+- **静态发布** — `certo`(Rust,axum,仅 rustls)与 `pdns_server` 打包为一个 `linux/amd64` tarball,由 [lode](https://github.com/bkhq/lode) 运行并自动更新
 
 ## 工作原理
 
@@ -72,7 +73,6 @@ services:
 ```toml
 [general]
 listen = "0.0.0.0:53"
-protocol = "both"
 domain = "s.dnsall.com"
 nsname = "s.dnsall.com"
 nsadmin = "admin.dnsall.com"
@@ -108,7 +108,7 @@ docker compose up -d
 ### 二进制部署
 
 ```bash
-cd web && npm ci && npx vite build && cd ..   # 构建内嵌的控制台前端(web/dist)
+cd web && bun install --frozen-lockfile && bun run build && cd ..   # 构建内嵌的控制台前端(web/dist)
 cargo build --locked --profile dist -p certo
 ./target/dist/certo -c data/config.toml
 ```
@@ -235,10 +235,10 @@ lego 从存储 URL 拉取账户（子域 + 凭据），之后每次都把 TXT �
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET / POST | `/api/zones` | 列出 zone / 创建 `{name}`(需开启 `api.allow_zone_creation`) |
-| GET / DELETE | `/api/zones/:zone` | 获取 zone 及记录 / 删除 zone |
-| GET / POST | `/api/zones/:zone/records` | 列出 / 添加记录 `{name, type, ttl?, data}` |
-| PUT / DELETE | `/api/zones/:zone/records/:id` | 替换 / 删除记录 |
+| GET / POST | `/api/zones` | 列出 zone / 创建 `{name}`,在委派到 `ns_target` 被验证前处于 `pending` 状态 |
+| GET / DELETE | `/api/zones/:zone` | 获取 zone 状态及 rrset / 删除 zone |
+| POST | `/api/zones/:zone/verify` | 立即重新检查委派(每分钟一次) |
+| GET / PATCH | `/api/zones/:zone/rrsets` | 列出 rrset / 修改 `{rrsets: [{name, type, ttl?, changetype?, records?}]}`(`REPLACE` 或 `DELETE`) |
 | GET / PUT | `/api/zones/:zone/dnssec` | DNSSEC 状态、DNSKEY 与 DS / `{enabled, nsec_mode}` |
 | GET / PUT | `/api/zones/:zone/axfr` | 区域传送设置 / `{allow_from}` |
 | POST / DELETE | `/api/zones/:zone/tsig-keys[/:name]` | 创建 TSIG 密钥 `{name, algorithm?}`(secret 只返回一次)/ 删除 |
@@ -273,8 +273,9 @@ lego 从存储 URL 拉取账户（子域 + 凭据），之后每次都把 TXT �
 | POST | `/admin/domains` | 为用户添加域名 |
 | DELETE | `/admin/domains/:domain` | 删除域名 |
 | GET | `/admin/records` | 列出所有 TXT 记录 |
-| GET / POST | `/admin/zones` | 列出所有 zone / 为用户创建 `{user_id, name}` |
-| 任意 | `/admin/zones/:zone/...` | 上述单个 zone 的接口,可操作任意用户的 zone |
+| GET / POST | `/admin/zones` | 列出所有 zone(含基础 zone)/ 为用户创建 `{user_id, name}` |
+| PUT | `/admin/zones/:zone/activation` | `{exempt}` — 免委派检查直接提供解析 |
+| 任意 | `/admin/zones/:zone/...` | 上述单个 zone 的接口,可操作任意用户的 zone 及基础 zone |
 
 ## 核心概念
 
@@ -314,7 +315,6 @@ _acme-challenge.example.com  CNAME  a1b2c3d4.s.dnsall.com
 | general | domain | 基础域名,记录位于 `<子域>.<domain>` | 必填 |
 | general | nsname | SOA/NS 应答中使用的名称 | 必填 |
 | general | listen | DNS 监听地址,如 `:53` | 必填 |
-| general | protocol | `both`、`udp`、`tcp`(可带 `4`/`6` 后缀) | 必填 |
 | database | engine | `sqlite`(仅支持此项) | `sqlite` |
 | database | connection | 数据库路径或 `file:` URL | 必填 |
 | api | ip / port | HTTP 监听地址;`PORT` 环境变量可覆盖端口 | 必填 |
@@ -322,7 +322,8 @@ _acme-challenge.example.com  CNAME  a1b2c3d4.s.dnsall.com
 | api | tls | `none`、`cert`、`letsencrypt`、`letsencryptstaging` | `none` |
 | api | jwt_secret | JWT 签名密钥 | 每次启动随机(重启后会话失效) |
 | api | admin_key | 管理 API 密钥 | 空（管理 API 禁用） |
-| api | allow_zone_creation | 允许用户自行创建托管 zone | `false`(仅管理员) |
+| pdns | dir | PowerDNS 配置、数据库与 socket 目录 | `data/pdns` |
+| zones | resolver | 委派检查使用的递归解析器 | 系统解析器 |
 
 ## 文档
 
@@ -339,7 +340,7 @@ _acme-challenge.example.com  CNAME  a1b2c3d4.s.dnsall.com
 
 ```bash
 # 安装依赖
-cd web && npm install && cd ..
+cd web && bun install && cd ..
 
 just dev        # 开发模式(前端 + 后端)
 just test       # cargo nextest run --workspace
@@ -353,7 +354,7 @@ just e2e        # 端到端测试(真实二进制 + dig)
 
 ## 致谢
 
-挑战协议基于 [acme-dns](https://github.com/acme-dns/acme-dns);DNS 服务基于 [hickory-dns](https://github.com/hickory-dns/hickory-dns)。
+挑战协议基于 [acme-dns](https://github.com/acme-dns/acme-dns);DNS 服务由 [PowerDNS Authoritative](https://github.com/PowerDNS/pdns) 提供。
 
 ## 协议
 

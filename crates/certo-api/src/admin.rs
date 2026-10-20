@@ -13,7 +13,7 @@ use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
     views::{DomainView, TxtView, UserView, txt_views},
-    web::{Credentials, add_domain_for, delete_user_for},
+    web::{Credentials, add_domain_for, delete_user_for, sync_txt},
 };
 
 pub(crate) async fn list_users(
@@ -106,10 +106,13 @@ pub(crate) async fn remove_domain(
 ) -> StatusCode {
     let domain = domain.trim().to_lowercase();
     for u in state.db.list_users().await.unwrap_or_default() {
-        let _ = state
+        if let Ok(Some(name)) = state
             .db
             .remove_user_domain(u.id, &domain, &state.opts.base_domain)
-            .await;
+            .await
+        {
+            sync_txt(&state, &name).await;
+        }
     }
     StatusCode::NO_CONTENT
 }

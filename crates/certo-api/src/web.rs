@@ -90,7 +90,7 @@ pub(crate) async fn info(State(state): State<AppState>) -> Json<serde_json::Valu
         "version": certo_core::VERSION,
         "base_domain": state.opts.base_domain,
         "api_domain": state.opts.api_domain,
-        "allow_zone_creation": state.opts.allow_zone_creation,
+        "ns_target": state.zones.policy().nsname,
         "capabilities": [
             "multi_key",
             "scoped_key",
@@ -109,20 +109,24 @@ pub(crate) async fn profile(GlobalBearer(auth): GlobalBearer) -> Json<serde_json
 
 /// Deletes a user with everything they own and stops serving their zones.
 pub(crate) async fn delete_user_for(state: &AppState, user_id: i64) -> ApiResult<()> {
-    let zones = state
-        .db
-        .zones(Some(user_id))
-        .await
-        .map_err(|e| ApiError::db("delete user", &e))?;
-    state
+    state.zones.remove_user_zones(user_id).await?;
+    let names = state
         .db
         .delete_user(user_id, &state.opts.base_domain)
         .await
         .map_err(|e| ApiError::db("delete user", &e))?;
-    for zone in zones {
-        state.zones.publish(&zone.name).await?;
+    for name in names {
+        sync_txt(state, &name).await;
     }
     Ok(())
+}
+
+/// Pushes a challenge name's TXT values to DNS; failures are logged, the database is the
+/// source of truth and the next write or restart reconciles.
+pub(crate) async fn sync_txt(state: &AppState, name: &str) {
+    if let Err(e) = state.zones.sync_txt(name).await {
+        tracing::error!(%name, error = %e, "challenge TXT not synced to PowerDNS");
+    }
 }
 
 pub(crate) async fn delete_account(
@@ -202,11 +206,14 @@ pub(crate) async fn remove_domain(
     if !auth.may_access(&domain) {
         return Err(ApiError::forbidden("domain_not_in_scope"));
     }
-    state
+    let removed = state
         .db
         .remove_user_domain(auth.user.id, &domain, &state.opts.base_domain)
         .await
         .map_err(|e| ApiError::db("remove domain", &e))?;
+    if let Some(name) = removed {
+        sync_txt(&state, &name).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

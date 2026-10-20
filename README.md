@@ -15,11 +15,11 @@ DNS TXT record management server for ACME DNS-01 challenges — speaks both the 
 - **API keys with scopes** — global (`*`), wildcard (`*.example.com`) or exact scopes; wildcard/global keys auto-create domains on demand, exact keys are update-only
 - **Source-IP allow list** — optional `allowfrom` CIDRs per acme-dns registration restrict who may `/update`
 - **Admin API** — `X-Admin-Key` endpoints to manage all users, domains and records
-- **Hosted zones** — authoritative forward and reverse zones (`23.251.162.in-addr.arpa`) per user: A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT, with optional DNSSEC (NSEC/NSEC3, DS for the parent) and AXFR to secondaries (IP allow list or TSIG)
-- **Web dashboard** — embedded React SPA (single binary), manage domains and zones, view CNAME/TXT records, copy client config
-- **SQLite storage** — a single local database file
-- **Single static binary** — Rust (hickory-dns + axum), rustls only
-- **Static releases** — binaries for `linux/amd64` + `linux/arm64`, run and auto-updated under [lode](https://github.com/bkhq/lode)
+- **Hosted zones** — authoritative forward and reverse zones (`23.251.162.in-addr.arpa`) per user: A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT, with optional DNSSEC (NSEC/NSEC3, DS for the parent) and AXFR to secondaries (IP allow list or TSIG). A zone is served once its parent delegates it to certo's nameserver (admins can exempt)
+- **PowerDNS data plane** — all DNS answers come from a bundled, static [PowerDNS Authoritative](https://www.powerdns.com/powerdns-authoritative-server) that certo starts, configures and drives through its API
+- **Web dashboard** — embedded React SPA, manage domains, keys and zones, view CNAME/TXT records, copy client config; admin area for users and every zone
+- **SQLite storage** — certo's database plus PowerDNS' own, both local files under `data/`
+- **Static releases** — `certo` (Rust, axum, rustls only) and `pdns_server` in one `linux/amd64` tarball, run and auto-updated under [lode](https://github.com/bkhq/lode)
 
 ## How It Works
 
@@ -76,7 +76,6 @@ Create `lode/data/config.toml`:
 ```toml
 [general]
 listen = "0.0.0.0:53"
-protocol = "both"
 domain = "s.dnsall.com"
 nsname = "s.dnsall.com"
 nsadmin = "admin.dnsall.com"
@@ -112,16 +111,18 @@ See [docs/deployment.md](docs/deployment.md) for the directory layout, update po
 ### Binary
 
 ```bash
-cd web && npm ci && npx vite build && cd ..   # build the embedded dashboard (web/dist)
+cd web && bun install --frozen-lockfile && bun run build && cd ..   # build the embedded dashboard (web/dist)
 cargo build --locked --profile dist -p certo
+just pdns-build && cp target/debug/pdns_server target/dist/        # static PowerDNS next to certo (needs docker)
 ./target/dist/certo -c data/config.toml
 ```
 
 The dashboard in `web/dist` is embedded at build time; without it the binary serves the API
-and DNS only.
+and DNS only. certo starts `pdns_server` from the directory of its own executable.
 
-> Upgrading from the Go releases: the database is upgraded in place to schema version 3 at
-> first start, which Go releases cannot open — back it up first. Certificates in
+> Upgrading: the database is upgraded in place to schema version 4 at first start, which
+> older releases cannot open — back it up first. Hosted zones of a pre-PowerDNS database are
+> imported once; DNSSEC zones get new keys, so re-publish their DS records. Certificates in
 > `acme_cache_dir` are reused.
 
 ## Usage with lego (httpreq)
@@ -215,7 +216,7 @@ An existing account is already a valid acme-dns account — the acme-dns `userna
 |--------|------|-------------|
 | POST | `/api/register` | Register `{username, password}` → `{token}` |
 | POST | `/api/login` | Login `{username, password}` → `{token}` |
-| GET | `/api/info` | Server info `{provider, version, base_domain, api_domain, capabilities}` |
+| GET | `/api/info` | Server info `{provider, version, base_domain, api_domain, ns_target, capabilities}` |
 
 ### Account & Keys (JWT or global key)
 
@@ -240,10 +241,10 @@ An existing account is already a valid acme-dns account — the acme-dns `userna
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET / POST | `/api/zones` | List zones / create `{name}` (needs `api.allow_zone_creation`) |
-| GET / DELETE | `/api/zones/:zone` | Zone with records / delete zone |
-| GET / POST | `/api/zones/:zone/records` | List / add record `{name, type, ttl?, data}` |
-| PUT / DELETE | `/api/zones/:zone/records/:id` | Replace / delete record |
+| GET / POST | `/api/zones` | List zones / create `{name}` — the zone is `pending` until its delegation to `ns_target` is verified |
+| GET / DELETE | `/api/zones/:zone` | Zone with status and rrsets / delete zone |
+| POST | `/api/zones/:zone/verify` | Re-check the delegation now (one per minute) |
+| GET / PATCH | `/api/zones/:zone/rrsets` | List rrsets / change them `{rrsets: [{name, type, ttl?, changetype?, records?}]}` (`REPLACE` or `DELETE`) |
 | GET / PUT | `/api/zones/:zone/dnssec` | DNSSEC state, DNSKEY and DS / `{enabled, nsec_mode}` |
 | GET / PUT | `/api/zones/:zone/axfr` | Transfer settings / `{allow_from}` |
 | POST / DELETE | `/api/zones/:zone/tsig-keys[/:name]` | Create TSIG key `{name, algorithm?}` (secret returned once) / delete |
@@ -278,8 +279,9 @@ Credentials are the certo username + API key — basic-auth in the storage URL, 
 | POST | `/admin/domains` | Add domain for user |
 | DELETE | `/admin/domains/:domain` | Remove domain |
 | GET | `/admin/records` | List all TXT records |
-| GET / POST | `/admin/zones` | List all zones / create `{user_id, name}` |
-| any | `/admin/zones/:zone/...` | Per-zone routes above, for any user's zone |
+| GET / POST | `/admin/zones` | List all zones (incl. the base zone) / create `{user_id, name}` |
+| PUT | `/admin/zones/:zone/activation` | `{exempt}` — serve a zone without a delegation check |
+| any | `/admin/zones/:zone/...` | Per-zone routes above, for any user's zone and the base zone |
 
 ## Configuration
 
@@ -290,16 +292,16 @@ code default, and env overrides.
 |---------|-----|-------------|---------|
 | general | domain | Base domain; records live at `<subdomain>.<domain>` | required |
 | general | nsname | Name used in SOA/NS answers | required |
-| general | listen | DNS listen address, e.g. `:53` | required |
-| general | protocol | `both`, `udp`, `tcp` (+ `4`/`6` variants) | required |
+| general | listen | DNS listen address for PowerDNS, e.g. `:53` | required |
 | database | engine | `sqlite` (only supported engine) | `sqlite` |
 | database | connection | Local DB path or `file:` URL | required |
+| pdns | dir | PowerDNS config, database and socket directory | `data/pdns` |
+| zones | resolver | Recursive resolver for delegation checks | system resolver |
 | api | ip / port | HTTP listen address; `PORT` env overrides the port | required |
 | api | api_domain | API domain (display only) | falls back to `general.domain` |
 | api | tls | `none`, `cert`, `letsencrypt`, `letsencryptstaging` | `none` |
 | api | jwt_secret | JWT signing key | random per start (sessions drop on restart) |
 | api | admin_key | Admin API key | empty (admin API disabled) |
-| api | allow_zone_creation | Users may create hosted zones themselves | `false` (admin only) |
 
 ## Documentation
 
@@ -315,9 +317,10 @@ code default, and env overrides.
 ## Development
 
 ```bash
-just build      # vite build + cargo build --profile dist -> dist/certo
+just build      # bun build + cargo build --profile dist -> dist/certo
+just pdns-build # static pdns_server into target/debug (docker)
 just test       # cargo nextest run --workspace
-just lint       # rustfmt + clippy + tsc --noEmit
+just lint       # rustfmt + clippy + web lint + typecheck
 just rs-ci      # all Rust quality gates
 just e2e        # end-to-end suite (real binary + dig)
 ```
@@ -327,7 +330,7 @@ Full details in [docs/development.md](docs/development.md).
 ## Acknowledgements
 
 Challenge protocol based on [acme-dns](https://github.com/acme-dns/acme-dns); DNS served
-with [hickory-dns](https://github.com/hickory-dns/hickory-dns).
+by [PowerDNS Authoritative](https://github.com/PowerDNS/pdns).
 
 ## License
 

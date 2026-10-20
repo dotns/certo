@@ -21,7 +21,7 @@ base64       = { workspace = true }
 bcrypt       = { workspace = true }
 certo-core   = { workspace = true }
 certo-db     = { workspace = true }
-certo-dns    = { workspace = true }
+certo-pdns   = { workspace = true }
 hyper-util   = { workspace = true }
 instant-acme = { workspace = true }
 ipnet        = { workspace = true }
@@ -41,4 +41,5 @@ tracing      = { workspace = true }
 x509-parser  = { workspace = true }
 
 [dev-dependencies]
+certo-pdns     = { workspace = true, features = ["mock"] }
 http-body-util = { workspace = true }

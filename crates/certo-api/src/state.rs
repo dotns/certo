@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 use axum::http::HeaderName;
 use certo_core::{config::Config, ids};
 use certo_db::Db;
-use certo_dns::Zones;
+use certo_pdns::Zones;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use secrecy::{ExposeSecret, SecretString};
 
@@ -22,8 +22,6 @@ pub struct ApiOptions {
     pub admin_key: Option<SecretString>,
     /// Whether open registration endpoints are enabled.
     pub allow_registration: bool,
-    /// Whether users may create zones themselves.
-    pub allow_zone_creation: bool,
     /// Allowed CORS origins; empty allows all.
     pub cors_origins: Vec<String>,
     /// Trusted header carrying the client IP.
@@ -39,7 +37,6 @@ impl fmt::Debug for ApiOptions {
             .field("api_domain", &self.api_domain)
             .field("admin_key", &self.admin_key.is_some())
             .field("allow_registration", &self.allow_registration)
-            .field("allow_zone_creation", &self.allow_zone_creation)
             .field("cors_origins", &self.cors_origins)
             .field("client_ip_header", &self.client_ip_header)
             .field("tls", &self.tls)
@@ -78,7 +75,6 @@ impl ApiOptions {
             jwt_secret: jwt_secret.into(),
             admin_key: (!api.admin_key.is_empty()).then(|| api.admin_key.clone().into()),
             allow_registration: api.registration_allowed(),
-            allow_zone_creation: api.allow_zone_creation,
             cors_origins: api.corsorigins.clone(),
             client_ip_header,
             tls: !matches!(api.tls, certo_core::config::TlsMode::None),

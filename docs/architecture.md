@@ -1,5 +1,18 @@
 # Architecture
 
+certo is a control plane in front of a bundled [PowerDNS Authoritative](https://doc.powerdns.com/authoritative/)
+server. certo owns users, API keys and scopes, the ACME challenge protocols, zone
+ownership, the dashboard and its own TLS; PowerDNS owns every DNS answer.
+
+```
+lode ──run──> certo ──spawn/supervise──> pdns_server (general.listen, API on 127.0.0.1:[pdns].api_port)
+               │  users, keys, scopes, ownership, challenge protocols, dashboard, TLS
+               └──HTTP API (X-API-Key, random per start)──> zones / rrsets / cryptokeys / tsigkeys / metadata
+```
+
+certo never reads or writes the PowerDNS SQLite file after creating its schema; all DNS
+data goes through the API.
+
 ## Startup flow (`crates/certo/src/main.rs`)
 
 1. Harden the process (umask 077, core dumps off, panic hook), parse `-c` (default
@@ -7,10 +20,20 @@
    env overrides).
 2. Set up logging, install the rustls `aws-lc-rs` provider.
 3. `Db::open` — open SQLite, create or upgrade the schema.
-4. Build the challenge responder and the hosted-zone service; `Zones::load_all` signs and
-   publishes every zone into the catalog. A background task re-signs DNSSEC zones daily.
-5. Start the DNS listeners, then the HTTP server (plain, PEM files, or ACME via its own DNS).
-6. Run until a server fails or SIGINT/SIGTERM arrives; shutdown drains HTTP for up to 10 s.
+4. `Supervisor::start` (`certo-pdns`) — resolve the `pdns_server` binary (`[pdns] binary`,
+   default next to the certo executable), create `[pdns] dir` (0700), initialize
+   `pdns.sqlite3` from the embedded PowerDNS schema when missing, write `pdns.conf` (0600)
+   from the certo config, spawn `pdns_server` and wait up to 10 s for its API. The
+   supervisor restarts PowerDNS with exponential backoff (max 30 s) when it exits; after 5
+   exits within a minute certo itself exits non-zero so the outer supervisor restarts the
+   whole tree.
+5. Build the `Zones` service: import a schema-3 database once (see
+   [Migrations](#migrations)), create the base zone when PowerDNS does not have it, and
+   reconcile every challenge TXT name from the `txt` table into it.
+6. Start the HTTP server (plain, PEM files, or ACME via certo's own DNS) and the hourly
+   delegation-check loop.
+7. Run until the HTTP server fails, PowerDNS crashes too often, or SIGINT/SIGTERM arrives;
+   shutdown drains HTTP for up to 10 s, then sends PowerDNS SIGTERM and SIGKILL after 10 s.
 
 ## Crates
 
@@ -18,7 +41,7 @@
 |---|---|
 | `certo-core` | Config (`config.rs`), domain types, identifier generation (`ids.rs`), scope matching |
 | `certo-db` | SQLite via `rusqlite` (bundled). One connection behind a mutex, calls run on `spawn_blocking`. Owns schema creation and versioned upgrades |
-| `certo-dns` | `hickory-server`: challenge responder (static records + DB TXT), hosted zones (validation, materialization, DNSSEC, AXFR/TSIG), listeners |
+| `certo-pdns` | PowerDNS supervisor and generated config, HTTP API client, rrset validation, delegation checker, `Zones` service (base zone, challenge TXT sync, activation cycle, DNSSEC, AXFR/TSIG, legacy import). Feature `mock` provides an in-memory PowerDNS API and a scripted checker for tests |
 | `certo-api` | `axum` HTTP layer: challenge protocols, dashboard API, zone API, admin API, CORS, SPA serving, TLS and ACME |
 | `certo` | Binary: wiring, logging, shutdown |
 | `web` | React SPA; `certo-api` embeds `web/dist` at build time (`rust-embed`) |
@@ -35,6 +58,7 @@ the API router or the SPA:
   split is deliberate; changing it breaks either the signup page or acme-dns clients.
 - Everything else → static file from `web/dist` if it exists, else `index.html` (SPA
   client-side routing). Priority: on-disk `web/dist` (dev override) > embedded copy.
+- The dashboard's admin area therefore lives at `/manage`, not `/admin`.
 
 ## Challenge write paths
 
@@ -47,6 +71,12 @@ Both protocols end at the same `txt` table, keyed by `<subdomain>.<base domain>`
 | Addressing | FQDN (`_acme-challenge.example.com.`, or the CNAME-resolved name) | `subdomain` |
 | Write | `present_txt` — plain insert, unbounded | `update_acmedns_txt` — insert, then trim to the 2 newest rows |
 | Delete | explicit `/cleanup` (`DELETE … WHERE Domain AND Value`) | none — the rolling cap is the cleanup |
+
+After every write the handler calls `Zones::sync_txt(name)`, which publishes the full value
+list of that name as one TXT rrset (TTL 1) in the base zone, or deletes the rrset when no
+value is left. The `txt` table stays the source of truth: at startup every distinct name is
+reconciled into PowerDNS, so a lost or wiped `pdns.sqlite3` is rebuilt from certo's
+database.
 
 The acme-dns rolling cap exists because acme-dns clients never call a cleanup endpoint,
 and because a certificate covering both `example.com` and `*.example.com` produces two
@@ -66,39 +96,69 @@ If the domain is not registered yet, `auto_create` provisions it — see
 [on-demand creation](#on-demand-domain-creation). Case 1 is never auto-created: a name
 already under the base domain has no real domain to create.
 
-## DNS resolution (`crates/certo-dns`)
+## DNS data plane (`crates/certo-pdns`)
 
-`DnsHandler` sends a query to the hosted-zone catalog when the name is inside a user zone,
-and to the challenge responder otherwise.
+PowerDNS runs with the `gsqlite3` backend (`gsqlite3-dnssec=yes`), `api=yes` on
+`127.0.0.1:[pdns].api_port` with a per-start random key, `default-api-rectify=yes`,
+`allow-axfr-ips=` (empty: transfers only per zone metadata), `security-poll-suffix=`
+(no outbound security poll), `default-soa-content` built from `general.nsname`/`nsadmin`,
+and `loglevel` mapped from `logconfig.loglevel`. PowerDNS output is forwarded to certo's
+log. Names outside every zone answer `REFUSED` (PowerDNS behaviour; the former server said
+`NXDOMAIN`).
 
-Challenge responder (`challenge.rs`), answering exactly like the former Go server:
+### Base zone
 
-- Names it is not authoritative for get `NXDOMAIN`; static records come from
-  `general.records`, and TXT queries append dynamic values.
-- TXT lookups return **all** stored values for the queried name, one TXT RR per value,
-  TTL 1. Writing a row makes a new subdomain answerable.
-- `_acme-challenge.<base domain>` is special-cased so certo can solve DNS-01 for its
-  **own** API certificate when `api.tls = letsencrypt`.
+`general.domain` is a PowerDNS zone like any other. `ensure_base_zone` creates it at first
+start with the apex NS (`general.nsname`) and the parsed `general.records` lines that fall
+inside the base domain (others are logged as errors); an existing zone is left alone, so
+`general.records` is a first-start seed. The base zone row in `zones` has `user_id = NULL`;
+only admin routes see it (`system: true`), it is always exempt and cannot be deleted
+(`403 zone_not_allowed`). `_acme-challenge.<base>` for certo's own certificate is a TXT
+rrset write on this zone.
 
-Hosted zones (`zones.rs`, `zone.rs`, `records.rs`):
+### Hosted zones
 
-- The database is the source of truth. Every change rebuilds the zone (SOA from
-  `general.nsname`/`nsadmin`, serial `max(old + 1, unix time)`) into a hickory in-memory
-  zone on the blocking pool and swaps it into the catalog; publishes are serialized so a
-  stale snapshot never wins. The catalog is an immutable snapshot replaced on every
-  publish, so queries never wait for a publish.
-- Uniqueness, overlap with another user's zone, and CNAME exclusivity at a name are
-  enforced inside the `certo-db` write transactions.
-- Zone names need at least two labels and may not be at or under `general.domain`, cover a
-  static config record, or overlap another user's zone.
-- Record types: A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT. PTR only in `in-addr.arpa` /
-  `ip6.arpa` zones; CNAME not at the apex and exclusive at its name.
-- DNSSEC (opt-in): one ECDSAP256SHA256 key per zone, online signing with NSEC or NSEC3
-  (RFC 9276 parameters), RRSIG validity 14 days, re-signed every 24 h.
-- AXFR is refused unless the source address is in the zone's allow list or the request is
-  signed with one of its TSIG keys (`CertoZone` wraps the in-memory zone because hickory's
-  in-memory handler does not verify TSIG). DNSSEC records are included only when the
-  request sets DO.
+- A zone belongs to one user. Names need at least two labels and may not be at or under
+  `general.domain` or overlap another user's zone (`403 zone_not_allowed`).
+- Records are managed as rrsets (`name`, `type`, `ttl`, `records[]`) through
+  `PATCH …/rrsets` with `REPLACE`/`DELETE` changes. certo checks the owner name is inside
+  the zone, the type is in the allowed list (A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT;
+  PTR only in `in-addr.arpa` / `ip6.arpa` zones), CNAME is not at the apex, and quotes plain
+  TXT values; PowerDNS validates the rest and its message is surfaced as
+  `400 pdns_rejected`. The SOA is maintained by PowerDNS (`soa-edit-api`).
+- DNSSEC (opt-in): one `ecdsa256` CSK created through `cryptokeys`; NSEC3 is switched on
+  with `NSEC3PARAM` metadata (RFC 9276 parameters). `GET …/dnssec` returns the DNSKEY and
+  the DS records PowerDNS computes (one per digest type).
+- AXFR: `ALLOW-AXFR-FROM` metadata holds the allow list (CIDRs, normalized), `tsigkeys` +
+  `TSIG-ALLOW-AXFR` metadata hold the TSIG keys. A transfer is accepted when the source
+  address is allowed or the request is signed with one of the zone's keys. NOTIFY is not
+  sent.
+- After creating a zone certo flushes the PowerDNS packet cache for that name, because the
+  cache would otherwise keep answering `REFUSED` for up to `cache-ttl` seconds.
+
+### Zone activation
+
+Anyone may create a zone, but it is served only when the parent delegates it to us:
+
+1. `POST /api/zones` stores the ownership row as `pending` and runs a delegation check
+   immediately. Nothing is served and rrsets cannot be changed (`409 zone_not_active`).
+2. The check (`DnsDelegationChecker`) resolves the parent's nameservers through
+   `[zones] resolver` (default: system resolver, fallback `1.1.1.1:53`), asks one of them
+   non-recursively for `NS <zone>` and requires `general.nsname` in the referral.
+3. On success the zone is created in PowerDNS (restoring the rrset snapshot of a previous
+   activation, if any) with the apex NS and becomes `active`.
+4. Pending zones are re-checked hourly and on `POST …/verify` (one check per minute per
+   zone, `429 check_rate_limited`; an inconclusive check answers `503 check_failed`). A
+   pending zone nobody activates within 30 days is deleted.
+5. Active zones are re-checked daily. Only a definite "not delegated to us" answer counts
+   as a failure; after 7 consecutive failures the zone is deactivated: the PowerDNS zone is
+   deleted and its rrsets are kept in `zones.snapshot` so a later activation restores them.
+   This is what frees a name when a domain changes hands.
+6. Admin exemption (`PUT /admin/zones/{zone}/activation {"exempt": true}`) activates a zone
+   without a check and skips re-checks; `false` returns it to the normal cycle.
+
+Zone views expose `status` (`pending` / `active`), `exempt`, `system`, `verified_at`,
+`last_check`, `last_error`, `failed_checks` and the `ns_target` to delegate to.
 
 ## Authorization model
 
@@ -122,9 +182,10 @@ scoped key gets `403 global_key_required`. `Bearer` accepts any key and leaves s
 to the handler.
 
 Hosted zones belong to one user. A user's session or global key manages all their zones; a
-scoped key only zones its scope covers (`403 domain_not_in_scope`). Other users' zones
-answer `404`. Self-service creation needs `api.allow_zone_creation`; the admin API can
-always create a zone and assign it to a user.
+scoped key only zones its scope covers (`403 domain_not_in_scope`). Other users' zones and
+the base zone answer `404`. Every user may create zones; serving them is gated by
+[activation](#zone-activation). The admin API (`X-Admin-Key`) creates zones for any user,
+sees every zone including the base zone, and sets the activation exemption.
 
 ### On-demand domain creation
 
@@ -144,24 +205,24 @@ of a comma-separated list).
 
 ## Database
 
-SQLite, schema version **3**, tracked in `acmedns.db_version`.
+certo's SQLite database, schema version **4**, tracked in `acmedns.db_version`:
 
 ```
 acmedns(Name TEXT, Value TEXT)                        -- key/value metadata, incl. db_version
-txt(Domain TEXT, Value TEXT, LastUpdate INT)          -- challenge TXT records
+txt(Domain TEXT, Value TEXT, LastUpdate INT)          -- challenge TXT records (source of truth)
 users(id, username UNIQUE, password_hash, created_at)
 user_domains(user_id, domain, subdomain UNIQUE,
              allowfrom TEXT DEFAULT '[]',
              UNIQUE(user_id, domain))
 api_keys(id, user_id, name, key_value UNIQUE,
          scope TEXT DEFAULT '["*"]', created_at)
-zones(id, user_id, name UNIQUE, serial, dnssec_enabled,
-      nsec_mode DEFAULT 'nsec', axfr_allow_from TEXT DEFAULT '[]', created_at)
-records(id, zone_id, name, rtype, ttl, rdata, created_at)
-zone_keys(id, zone_id, algorithm, private_key BLOB, created_at)   -- DNSSEC, PKCS#8
-tsig_keys(id, zone_id, name, algorithm, secret BLOB, created_at,
-          UNIQUE(zone_id, name))
+zones(id, user_id NULL for the base zone, name UNIQUE,
+      active, exempt, verified_at, last_check, last_error,
+      failed_checks, snapshot TEXT, created_at)       -- ownership and activation state only
 ```
+
+Everything DNS — rrsets, SOA serials, DNSSEC keys, TSIG keys, zone metadata — lives in
+PowerDNS' own SQLite database, `[pdns] dir/pdns.sqlite3`.
 
 Notes:
 
@@ -170,20 +231,19 @@ Notes:
 - `user_domains` is also where anonymous acme-dns registrations live; for those,
   `domain == subdomain` because there is no real domain behind them.
 - `allowfrom` is a JSON array of CIDR strings, only meaningful for acme-dns registrations.
-- Deleting a user (`DELETE /api/profile` or `/admin/users/{id}`) removes its `api_keys`,
-  `user_domains`, the challenge TXT rows of those subdomains, and its zones (with records
-  and keys) in one transaction; removing a domain also removes that subdomain's TXT rows.
-- `records` store absolute owner names without the trailing dot and RDATA in presentation
-  format (names absolute, TXT quoted).
+- Deleting a user (`DELETE /api/profile` or `/admin/users/{id}`) first removes the user's
+  zones from PowerDNS, then deletes its `api_keys`, `user_domains`, the challenge TXT rows
+  of those subdomains and its zone rows in one transaction, and finally unpublishes the
+  affected TXT names; removing a domain does the same for that subdomain.
+- `zones.snapshot` is the JSON rrset list of a deactivated zone, restored on re-activation.
 
 **Credential storage.** Account passwords are bcrypt-hashed. **API keys are stored in
 plaintext** (`api_keys.key_value`) — this is required by the acme-dns HTTP storage backend,
 which must return the key as the acme-dns `password`, and by httpreq/acme-dns Basic-Auth
-echo. Treat the database as a secret: restrict file permissions and use disk encryption,
-because a database compromise exposes usable API keys directly. `admin_key` and
-`jwt_secret` live only in the config file, never in the database. DNSSEC private keys and
-TSIG secrets are stored in the database too and are never returned by the API (a TSIG
-secret only once, at creation).
+echo. Treat both databases as secrets: restrict file permissions and use disk encryption,
+because a compromise exposes usable API keys (certo) and DNSSEC private keys and TSIG
+secrets (PowerDNS) directly. `admin_key` and `jwt_secret` live only in the config file. A
+TSIG secret is returned by the API only once, at creation.
 
 ### Migrations
 
@@ -191,10 +251,18 @@ secret only once, at creation).
 
 - version > `DB_VERSION` → refuse to start ("regenerate the database").
 - version < `DB_VERSION` → run the upgrade chain, each step in one transaction: `1 → 2`
-  adds `user_domains.allowfrom`, `2 → 3` adds the zone tables.
+  adds `user_domains.allowfrom`, `2 → 3` adds the zone tables, `3 → 4` adds the activation
+  columns and schedules the one-time import.
 
-A fresh database is created at the current version directly. Version 3 databases cannot be
-opened by the Go releases of certo.
+The `3 → 4` import runs at startup once PowerDNS is ready: every zone of the old `records`,
+`zone_keys` and `tsig_keys` tables is created in PowerDNS with its rrsets, DNSSEC is
+re-enabled with a fresh key where it was on (the new DS is logged at warn level), TSIG keys
+are created with their old secrets, transfer settings are copied, and every imported zone is
+marked active and exempt (it was served before). The old tables are then dropped. A failed
+import leaves the database at version 3 and aborts the start.
+
+A fresh database is created at the current version directly. Version 3 and 4 databases
+cannot be opened by the Go releases of certo.
 
 ## Identifier formats
 

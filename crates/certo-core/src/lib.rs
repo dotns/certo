@@ -6,9 +6,8 @@ pub mod ids;
 mod types;
 
 pub use types::{
-    ACMEDNS_TXT_LENGTH, ApiKey, MAX_TXT_VALUE_LENGTH, TsigKey, TxtRecord, User, UserDomain, Zone,
-    ZoneKey, ZoneRecord, extract_domain_from_fqdn, extract_subdomain_from_fqdn, internal_domain,
-    sanitize_fqdn,
+    ACMEDNS_TXT_LENGTH, ApiKey, MAX_TXT_VALUE_LENGTH, TxtRecord, User, UserDomain, Zone,
+    extract_domain_from_fqdn, extract_subdomain_from_fqdn, internal_domain, sanitize_fqdn,
 };
 
 /// Release version: `$CERTO_VERSION` at build time (set from the git tag), else the

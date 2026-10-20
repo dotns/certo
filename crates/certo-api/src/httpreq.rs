@@ -100,6 +100,7 @@ pub(crate) async fn present(
         .present_txt(&name, &payload.value)
         .await
         .map_err(|e| ApiError::db("present", &e))?;
+    state.zones.sync_txt(&name).await?;
     tracing::info!(fqdn = %payload.fqdn, internal_domain = %name, "TXT record presented");
     Ok(Json(PresentResponse {
         internal_domain: name.clone(),
@@ -126,6 +127,7 @@ pub(crate) async fn cleanup(
         .cleanup_txt(&name, &payload.value)
         .await
         .map_err(|e| ApiError::db("cleanup", &e))?;
+    state.zones.sync_txt(&name).await?;
     tracing::info!(fqdn = %payload.fqdn, internal_domain = %name, "TXT record cleaned up");
     Ok(StatusCode::OK)
 }

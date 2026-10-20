@@ -1,12 +1,16 @@
 # Deployment
 
-certo is a single binary that serves the DNS zone, the HTTP API and the dashboard SPA. It
-needs port 53 (UDP+TCP) for DNS and one HTTP(S) port for the API.
+A certo release is two executables that run as one process tree: `certo` (HTTP API,
+dashboard, challenge protocols, zone management) starts and supervises `pdns_server`, a
+static build of PowerDNS Authoritative that answers all DNS queries. `pdns_server` must sit
+next to the `certo` executable (or be named in `[pdns] binary`). The pair needs port 53
+(UDP+TCP, bound by `pdns_server`) and one HTTP(S) port for the API.
 
 ## Docker Compose (lode)
 
-Releases are published on GitHub as static binaries, `certo-linux-amd64.tar.gz` and
-`certo-linux-arm64.tar.gz`. certo publishes no container image of its own; the recommended
+Releases are published on GitHub as a static tarball, `certo-linux-amd64.tar.gz`, holding
+`certo` and `pdns_server` (an arm64 asset returns once the static PowerDNS build is
+verified on an arm runner). certo publishes no container image of its own; the recommended
 deployment runs the release under [lode](https://github.com/bkhq/lode), a small supervisor
 image (`bkhq/lode`) that downloads the asset named in `lode.toml`, checks it against the
 sha256 digest GitHub publishes for it, launches certo and, when allowed, installs newer
@@ -40,13 +44,13 @@ services:
 `./lode` is mounted at `/srv/lode`: lode keeps `lode.toml`, its state and the installed
 releases (`versions/`) there and runs certo with `/srv/lode` as working directory, so the
 relative paths of the sample config (`./data/config.toml`, `data/db/certo.db`,
-`data/certs`, `data/logs`) resolve to `lode/data/...` on the host.
+`data/pdns`, `data/certs`, `data/logs`) resolve to `lode/data/...` on the host.
 
 The repository's [`lode.toml`](../lode.toml) is the operator's file. Edit two things:
 
 | Key | Meaning |
 |---|---|
-| `[update].asset` | The release file for this CPU: `certo-linux-amd64.tar.gz` or `certo-linux-arm64.tar.gz` |
+| `[update].asset` | The release file: `certo-linux-amd64.tar.gz` (the only architecture published for now) |
 | `[update].policy` | `off` never updates, `check` only logs newer releases, `auto` installs them and restarts certo |
 
 Releases carry no publisher signature yet, so `[trust].require_signature = "auto"` installs
@@ -74,23 +78,27 @@ Moving an existing deployment: stop the old container, move its `data/` director
 and certificates are used as they are.
 
 Without lode, the repository `Dockerfile` still builds a plain image (`docker build -t
-certo .`, entrypoint `/app/certo`, volume `/app/data`), and the release binaries run on any
-Linux host as described next.
+certo .`, entrypoint `/app/certo`, `pdns_server` next to it, volume `/app/data`), and the
+release binaries run on any Linux host as described next.
 
 ## Binary
 
 ```bash
-cd web && npm ci && npx vite build && cd ..   # build the SPA (embedded)
+cd web && bun install --frozen-lockfile && bun run build && cd ..   # build the SPA (embedded)
 cargo build --locked --profile dist -p certo
+just pdns-build                                # static pdns_server into target/debug (needs docker)
+cp target/debug/pdns_server target/dist/
 ./target/dist/certo -c data/config.toml
 ```
 
 For a portable static binary build for musl, e.g.
-`cargo zigbuild --locked --profile dist -p certo --target x86_64-unknown-linux-musl`.
-Binding port 53 needs root or `CAP_NET_BIND_SERVICE`:
+`cargo zigbuild --locked --profile dist -p certo --target x86_64-unknown-linux-musl`, or
+export both binaries from the `Dockerfile` (`--target binary`, see
+[development.md](development.md#releasing)). Port 53 is bound by `pdns_server`, so it is the
+one that needs root or `CAP_NET_BIND_SERVICE`:
 
 ```bash
-sudo setcap 'cap_net_bind_service=+ep' ./certo
+sudo setcap 'cap_net_bind_service=+ep' ./pdns_server
 ```
 
 `web/dist` is embedded at build time when it exists. If an on-disk `web/dist` is present
@@ -139,6 +147,14 @@ example.net.               NS  s.example.com.               ; at the example.net
 23.251.162.in-addr.arpa.   NS  s.example.com.               ; requested from the IP block owner (RIR/ISP)
 ```
 
+A newly created zone stays `pending` until certo sees that delegation (checked at
+creation, on "Verify delegation", and hourly); only then is it served. The check uses the
+recursive resolver in `[zones] resolver` (system resolver by default), so the host needs
+outbound DNS. Zones that lose their delegation for 7 consecutive daily checks stop being
+served (their records are kept and restored on re-activation). An administrator can exempt
+a zone from the check in the dashboard's admin area or with
+`PUT /admin/zones/{zone}/activation`.
+
 With DNSSEC enabled for a zone, publish the DS record shown in the dashboard (or returned by
 `GET /api/zones/{zone}/dnssec`) at the parent; before disabling DNSSEC, remove the DS first
 and wait out its TTL, or validating resolvers will treat the zone as bogus.
@@ -180,19 +196,27 @@ otherwise the self-issued challenge cannot be validated.
 
 ## Operations
 
-- **Persistence** — everything lives under the path configured in `database.connection`
-  (plus `acme_cache_dir` and any log file). Back up that directory; `data/` is
-  git-ignored by design.
+- **Persistence** — certo's database (`database.connection`), PowerDNS' database and
+  config (`[pdns] dir`, default `data/pdns`), `acme_cache_dir` and any log file. Back up
+  the whole `data/` directory; it is git-ignored by design. A lost `data/pdns` is rebuilt
+  from certo's database only for the base zone and challenge records — hosted zone
+  contents, DNSSEC keys and TSIG keys are gone with it.
 - **Sessions** — set `api.jwt_secret` explicitly, otherwise every restart invalidates all
   dashboard sessions.
 - **Admin API** — leave `api.admin_key` empty to keep `/admin/*` disabled.
-- **Health check** — `GET /livez` (process up) and `GET /readyz` (database reachable)
-  return `200`; `GET /health` is kept for existing probes.
+- **Health check** — `GET /livez` (process up) and `GET /readyz` (database and PowerDNS
+  API reachable) return `200`; `GET /health` is kept for existing probes.
+- **PowerDNS** — `pdns_server` is restarted by certo when it exits; if it keeps crashing
+  (5 exits within a minute) certo exits too, so lode or Docker restarts the pair. Its log
+  lines appear in certo's log.
 - **Upgrades** — under lode, `policy = "auto"` installs new releases by itself and
   `lode-cli update` does it on demand; otherwise replace the binary. Schema migrations run
   automatically at startup. A database created by a *newer* certo makes an older binary
   refuse to start, so roll forward, not back (a lode rollback to a release with an older
-  schema fails the same way). The first Rust release upgrades the schema to version 3,
-  which the Go releases cannot read: back up the database before switching.
-- **Keys** — DNSSEC private keys and TSIG secrets live in the database; losing it means
-  re-keying signed zones (new DS at the parent).
+  schema fails the same way). Rust releases use schema version 4, which the Go releases
+  cannot read: back up the database before switching. Upgrading a schema-3 database
+  (releases before PowerDNS) imports every hosted zone into PowerDNS once at first start;
+  DNSSEC zones get **new keys**, so publish the new DS at the parent afterwards (the old DS
+  is logged at warn level together with the new one). TSIG secrets are preserved.
+- **Keys** — DNSSEC private keys and TSIG secrets live in PowerDNS' database under
+  `[pdns] dir`; losing it means re-keying signed zones (new DS at the parent).

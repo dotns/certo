@@ -1,0 +1,53 @@
+import { useState } from 'react'
+import { useInfoQuery } from '@/features/info/hooks'
+import { CreateZoneDialog } from '@/features/zones/create-zone-dialog'
+import { useZonesQuery } from '@/features/zones/hooks'
+import { ZoneTable } from '@/features/zones/zone-table'
+import { EmptyState } from '@/shared/components/empty-state'
+import { ErrorAlert } from '@/shared/components/error-alert'
+import { Loading } from '@/shared/components/loading'
+import { Card, CardContent } from '@/shared/components/ui/card'
+import { Label } from '@/shared/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select'
+import { useAdminUsersQuery } from './hooks'
+
+export function AdminZones() {
+  const zones = useZonesQuery('admin')
+  const users = useAdminUsersQuery()
+  const info = useInfoQuery()
+  const [owner, setOwner] = useState<string>('')
+  const [actionError, setActionError] = useState<unknown>(null)
+
+  return (
+    <div className="flex flex-col gap-4 pt-2">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Toggle the exemption to serve a zone without a verified delegation. The base zone is always served.</p>
+        <div className="flex items-end gap-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="zone-owner">Create for user</Label>
+            <Select value={owner} onValueChange={v => setOwner(String(v ?? ''))}>
+              <SelectTrigger id="zone-owner" className="w-44">
+                <SelectValue placeholder="Choose a user" />
+              </SelectTrigger>
+              <SelectContent>
+                {(users.data ?? []).map(u => <SelectItem key={u.id} value={String(u.id)}>{u.username}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          {owner && <CreateZoneDialog scope="admin" nsTarget={info.data?.ns_target ?? ''} userId={Number(owner)} />}
+        </div>
+      </div>
+      <ErrorAlert error={zones.error} title="Zones could not be loaded" />
+      <ErrorAlert error={actionError} />
+      {zones.isPending && <Loading />}
+      {zones.data && zones.data.length === 0 && <EmptyState title="No zones" />}
+      {zones.data && zones.data.length > 0 && (
+        <Card>
+          <CardContent>
+            <ZoneTable scope="admin" zones={zones.data} onError={setActionError} />
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}

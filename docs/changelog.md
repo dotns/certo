@@ -87,3 +87,47 @@ Task 20261017-0515-ci-spa-build: the CI `e2e` job now builds the dashboard (Node
 ## 2026-10-17 12:40 [pitfall]
 
 A multi-platform `docker buildx build` runs the amd64 and arm64 `backend` stages in parallel; with plain `--mount=type=cache` both cargo processes share `/usr/local/cargo/registry` and `/build/target` and race (`failed to unpack package ... File exists`). `sharing=locked` on both mounts serializes them (first release run of v0.0.1 failed this way).
+
+## 2026-10-18 04:45 [decision]
+
+Direction change (owner): PowerDNS Authoritative becomes the DNS data plane; certo starts and configures a bundled static `pdns_server` and keeps only the management layer (users, keys, challenge protocols, zone ownership, dashboard, TLS). Task 20261018-0429-system-zone closed as superseded; plan 20261018-0445-pdns-control-plane drafted.
+
+## 2026-10-18 04:45 [progress]
+
+Spike for plan 20261018-0445-pdns-control-plane: fully static `pdns_server` 5.0.7 (gsqlite3 built in, no dynamic modules, 12.4 MB) builds on Alpine 3.22/musl in ~1 min (32 cores). Smoke test against the API: zone create, TXT rrset REPLACE with TTL 1 and two values, DELETE, CSK cryptokey with DS, TSIG key, `ALLOW-AXFR-FROM`/`TSIG-ALLOW-AXFR` metadata, clean SIGTERM. Build files kept at `.tmp/pdns-static/` (`Dockerfile.ok`, `smoke.sh`) until step 1 moves them into the repository.
+
+## 2026-10-18 04:45 [pitfall]
+
+Static PowerDNS: libtool drops `-static` from `LDFLAGS`; configure with `LDFLAGS=-static` (so its link tests pass) and then run `make LDFLAGS="-all-static -static-libgcc -static-libstdc++"`. Alpine needs `boost1.84-static`, `openssl-libs-static`, `sqlite-static`, `zlib-static`; `luajit-dev` already ships the static archive. LUA records pull in libcurl, so `--disable-lua-records`; `--without-libsodium --without-libdecaf --disable-systemd --disable-unit-tests --disable-ixfrdist`. `soa_edit_api` must be `DEFAULT`, not `INCEPTION-INCREMENT` (that is a SOA-EDIT value; pdns logs it as unknown).
+
+## 2026-10-18 05:05 [decision]
+
+Plan 20261018-0445-pdns-control-plane revised (owner): production is rebuilt once from the old database, so the schema 3 → 4 import is a one-shot maintenance step and the DNSSEC DS change is accepted. `api.allow_zone_creation` is replaced by zone activation: anyone may create a zone, it is served only after certo verifies the parent delegation points at `general.nsname` (re-checked daily, deactivated after 7 failed days), and admins can exempt a zone from the check.
+
+## 2026-10-18 05:20 [decision]
+
+Plan 20261018-0445-pdns-control-plane approved (owner): rrset-shaped record API accepted; arm64 assets suspended until the static pdns build is verified on a native arm runner; the dashboard is rewritten on the `/pma-web` baseline (TanStack Router/Query, shadcn/ui base-nova + Base UI, Tailwind, Zustand, Vitest, bun, nsl) with an admin area.
+
+## 2026-10-18 07:10 [progress]
+
+Plan 20261018-0445-pdns-control-plane steps 2-4: `crates/certo-pdns` (supervisor with restart backoff and SIGTERM/SIGKILL shutdown, generated `pdns.conf` with a per-start API key, API client, rrset validation, delegation checker that asks the parent's authoritative servers non-recursively, `Zones` service with base zone, challenge TXT sync/reconcile, activation cycle and legacy import; `mock` feature with an in-memory pdns API and a scripted checker for dependent crates). Schema 4 (`zones` with `active/exempt/verified_at/last_check/last_error/failed_checks/snapshot`; v3 record tables dropped after the one-shot import). `certo-api`: `/rrsets` GET/PATCH, `/verify`, `/admin/zones/{zone}/activation`, zone views with `status`/`exempt`/`system`/`ns_target`, challenge writes synced to pdns, `readyz` pings pdns, `api.allow_zone_creation` removed. `main.rs` starts pdns before the HTTP server, runs the hourly check loop and exits when pdns keeps crashing. `crates/certo-dns` and `hickory-server` removed. `just rs-ci` green (72 tests). Step order: e2e adaptation (6) runs before the dashboard rewrite (5) so the API is validated against the real pdns first.
+
+## 2026-10-18 07:10 [pitfall]
+
+PowerDNS creates a SOA for every new zone and rejects TXT content that is not quoted; certo quotes plain TXT values on `PATCH /rrsets` and returns them as pdns presents them (quoted). A test that binds an "unused" port and drops the listener races with other tests' ephemeral ports under nextest; keep the listener and close accepted connections instead.
+
+## 2026-10-18 07:40 [progress]
+
+Plan 20261018-0445-pdns-control-plane step 6: e2e suite on the real static `pdns_server` (42 cases, 11 files, 7 s). Helpers start certo with `[pdns] dir/api_port` and `[zones] resolver` pointed at pdns itself (unknown names are refused, so every delegation check is inconclusive and zones stay pending until the admin exempts them); the server object gained `dir` and `restart()`. New cases: pending zone refuses rrsets (`409 zone_not_active`), `verify` reports `503 check_failed`, admin exemption serves the zone and the base zone cannot be de-exempted or deleted, names outside every zone answer `REFUSED`, NSEC3 switch, TSIG key deletion revokes transfers, and a restart test that wipes `pdns.sqlite3` and checks the base zone and challenge TXT are rebuilt from certo's database. Generated `pdns.conf` now sets `allow-axfr-ips=` (pdns allows AXFR from localhost by default), `default-api-rectify=yes` and `security-poll-suffix=`.
+
+## 2026-10-18 07:40 [pitfall]
+
+The PowerDNS packet cache keeps serving `REFUSED` for a zone created after a negative query (`cache-ttl`, 20 s); zone creation through the API does not purge it. certo calls `PUT /cache/flush?domain=<zone>` after creating a zone. The API returns one DS per digest type (SHA-256 and SHA-384), so `ds` is a list. The sibling Rust image now ships `bun` so the e2e suite can run there (the station glibc is too old for binaries built in the image).
+
+## 2026-10-18 06:40 [progress]
+
+Plan 20261018-0445-pdns-control-plane steps 5 and 7, task completed. Dashboard rewritten on the pma-web baseline (`web/`: Vite 8, React 19, TanStack Router file routes + Query, Zustand session store, shadcn/ui `base-nova` on `@base-ui/react`, Tailwind 4, Vitest, antfu ESLint, bun): pages for domains, API keys, client snippets, zones (list with status badges, create, detail with rrset table, DNSSEC card with DS/DNSKEY, AXFR allow list and TSIG keys with one-time secret) and an admin area at `/manage` (admin key kept in `sessionStorage`; users, every zone incl. the base zone with the exemption switch, domains, TXT records). Gates: `bun run lint`, `typecheck`, `test:coverage` (41 cases, 99 % lines on `features/**` and `shared/lib/**`), `build`; every page exercised with Playwright against the debug binary (register → domain → key → zone pending → admin exemption → records → DNSSEC → TSIG → dark mode, no console errors). `Dockerfile` frontend stage, CI (new `web` job, e2e job) and `justfile` moved from npm to bun. Docs: `architecture.md`, `deployment.md`, `development.md`, `api.md`, `configuration.md`, both READMEs, `llms.txt`, sample `config.toml`, decision record `docs/decisions/20261018-powerdns-data-plane.md`. e2e 42/42 in the sibling image. Release `v0.1.0` is the owner's tag after commit.
+
+## 2026-10-18 06:40 [pitfall]
+
+The dashboard's admin area cannot live at `/admin`: `certo_api::app` routes every `/admin/*` request to the API router, so the SPA page answered a JSON 404 — it is `/manage` now. TypeScript 7.0 is not supported by typescript-eslint yet (antfu config fails to load) and drops `baseUrl`; `web/` pins `typescript` 6.0.3 until typescript-eslint supports TS 7 (recorded deviation from latest-stable). `react-refresh/only-export-components` is switched off for `src/app/routes/**` because TanStack route files must export `Route` next to their component (`allowExportNames` does not cover the local component). The e2e DNSSEC assertion compared the answer section in order; PowerDNS may return RRSIG before A, so it sorts now.

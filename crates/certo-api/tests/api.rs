@@ -1,7 +1,7 @@
 //! Router-level checks of auth, CORS, limits and acme-dns rules.
 #![allow(clippy::unwrap_used, clippy::panic, reason = "test code")]
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     Router,
@@ -11,7 +11,10 @@ use axum::{
 };
 use certo_api::{ApiOptions, AppState};
 use certo_db::Db;
-use certo_dns::{DynamicCatalog, ZonePolicy, Zones};
+use certo_pdns::{
+    Delegation, DelegationChecker, ZonePolicy, Zones,
+    mock::{MockPdns, ScriptedChecker},
+};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -23,7 +26,6 @@ fn options() -> ApiOptions {
         jwt_secret: "test-secret".to_owned().into(),
         admin_key: Some("admin".to_owned().into()),
         allow_registration: true,
-        allow_zone_creation: true,
         cors_origins: vec!["https://dash.example.org".into()],
         client_ip_header: None,
         tls: false,
@@ -32,7 +34,8 @@ fn options() -> ApiOptions {
 
 struct Api {
     app: Router,
-    catalog: DynamicCatalog,
+    pdns: MockPdns,
+    checker: Arc<ScriptedChecker>,
 }
 
 struct Resp {
@@ -42,23 +45,33 @@ struct Resp {
 }
 
 impl Api {
-    fn new(opts: ApiOptions, peer: &str) -> Self {
+    async fn new(opts: ApiOptions, peer: &str) -> Self {
         let db = Db::open(":memory:").unwrap();
-        let catalog = DynamicCatalog::new();
-        let policy = ZonePolicy::new(
-            "auth.example.org.".parse().unwrap(),
-            "ns1.auth.example.org",
-            "admin.example.org",
-            vec![],
-        )
-        .unwrap();
-        let zones = Zones::new(db.clone(), catalog.clone(), policy);
+        let pdns = MockPdns::start().await.unwrap();
+        let checker = Arc::new(ScriptedChecker::default());
+        let policy = ZonePolicy {
+            base_domain: "auth.example.org".into(),
+            nsname: "ns1.auth.example.org".into(),
+        };
+        let zones = Zones::new(
+            db.clone(),
+            pdns.client(),
+            policy,
+            Arc::clone(&checker) as Arc<dyn DelegationChecker>,
+        );
+        zones.ensure_base_zone(&[]).await.unwrap();
         let state = AppState::new(db, zones, opts).unwrap();
         let peer: SocketAddr = peer.parse().unwrap();
         Self {
             app: certo_api::app(state).layer(MockConnectInfo(peer)),
-            catalog,
+            pdns,
+            checker,
         }
+    }
+
+    /// Whether the mock pdns serves `zone`.
+    fn serves(&self, zone: &str) -> bool {
+        self.pdns.zone(zone).is_some()
     }
 
     async fn send(&self, req: Request<Body>) -> Resp {
@@ -97,7 +110,7 @@ impl Api {
 
 #[tokio::test]
 async fn probes() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     for path in ["/health", "/livez", "/readyz"] {
         assert_eq!(api.get(path, &[]).await.status, StatusCode::OK, "{path}");
     }
@@ -105,7 +118,7 @@ async fn probes() {
 
 #[tokio::test]
 async fn admin_key_is_required_and_checked() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let r = api.get("/admin/users", &[("x-admin-key", "wrong")]).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert_eq!(r.body, json!({"error": "invalid_admin_key"}));
@@ -122,7 +135,8 @@ async fn admin_key_is_required_and_checked() {
             ..options()
         },
         "127.0.0.1:1",
-    );
+    )
+    .await;
     let r = api.get("/admin/users", &[("x-admin-key", "")]).await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     assert_eq!(r.body, json!({"error": "admin_key_not_configured"}));
@@ -130,7 +144,7 @@ async fn admin_key_is_required_and_checked() {
 
 #[tokio::test]
 async fn oversized_and_malformed_bodies_are_invalid_json() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let huge = json!({ "username": "a".repeat(70 * 1024), "password": "secret1" });
     for body in [huge, json!("not an object")] {
         let r = api.json("POST", "/api/login", &[], body).await;
@@ -141,7 +155,7 @@ async fn oversized_and_malformed_bodies_are_invalid_json() {
 
 #[tokio::test]
 async fn sessions_and_tokens() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let creds = json!({"username": "alice", "password": "secret1"});
     let r = api.json("POST", "/api/register", &[], creds.clone()).await;
     assert_eq!(r.status, StatusCode::CREATED);
@@ -157,7 +171,8 @@ async fn sessions_and_tokens() {
             ..options()
         },
         "127.0.0.1:1",
-    );
+    )
+    .await;
     other.json("POST", "/api/register", &[], creds).await;
     let r = other
         .get("/api/profile", &[("authorization", &bearer)])
@@ -178,7 +193,7 @@ async fn sessions_and_tokens() {
 
 #[tokio::test]
 async fn cors_preflight_and_actual_requests() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let preflight = |origin: &'static str| {
         Request::builder()
             .method("OPTIONS")
@@ -226,7 +241,7 @@ async fn register_acmedns(api: &Api, allow: &[&str]) -> (String, String, String)
 
 #[tokio::test]
 async fn acmedns_update_honors_allowfrom_and_forwarded_header() {
-    let api = Api::new(options(), "198.51.100.7:4000");
+    let api = Api::new(options(), "198.51.100.7:4000").await;
     let (user, key, sub) = register_acmedns(&api, &["198.51.100.0/24"]).await;
     let txt = "a".repeat(43);
     let hdr = [("x-api-user", user.as_str()), ("x-api-key", key.as_str())];
@@ -248,7 +263,8 @@ async fn acmedns_update_honors_allowfrom_and_forwarded_header() {
             ..options()
         },
         "198.51.100.7:4000",
-    );
+    )
+    .await;
     let (user, key, sub) = register_acmedns(&api, &["198.51.100.0/24"]).await;
     let hdr = [
         ("x-api-user", user.as_str()),
@@ -275,7 +291,8 @@ async fn registration_can_be_disabled() {
             ..options()
         },
         "127.0.0.1:1",
-    );
+    )
+    .await;
     for path in ["/register", "/api/register"] {
         let r = api.json("POST", path, &[], json!({})).await;
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{path}");
@@ -285,7 +302,7 @@ async fn registration_can_be_disabled() {
 
 #[tokio::test]
 async fn storage_and_httpreq_challenge_with_basic_realm() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let r = api.get("/acmedns/example.com", &[]).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert_eq!(
@@ -325,99 +342,191 @@ async fn scoped_key(api: &Api, bearer: &str, scope: &[&str]) -> String {
     format!("Bearer {}", r.body["key"].as_str().unwrap())
 }
 
+fn delete(path: &str, headers: &[(&str, &str)]) -> Request<Body> {
+    let mut req = Request::builder().method("DELETE").uri(path);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    req.body(Body::empty()).unwrap()
+}
+
 #[tokio::test]
-async fn zone_and_record_lifecycle() {
-    let api = Api::new(options(), "127.0.0.1:1");
+async fn zones_activate_on_delegation_or_admin_exemption() {
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let alice = session(&api, "alice").await;
     let auth = [("authorization", alice.as_str())];
+    let admin = [("x-admin-key", "admin")];
 
+    // Not delegated yet: the zone is pending and not served.
     let r = api
         .json("POST", "/api/zones", &auth, json!({"name": "Example.COM."}))
         .await;
     assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
     assert_eq!(r.body["name"], "example.com");
-    assert_eq!(r.body["dnssec"], false);
-    assert!(api.catalog.contains(&"example.com.".parse().unwrap()));
+    assert_eq!(r.body["status"], "pending");
+    assert_eq!(r.body["exempt"], false);
+    assert_eq!(r.body["ns_target"], "ns1.auth.example.org");
+    assert_eq!(r.body["last_error"], "not delegated");
+    assert!(r.body.get("rrsets").is_none());
+    assert!(!api.serves("example.com"));
 
     let r = api
         .json("POST", "/api/zones", &auth, json!({"name": "example.com"}))
         .await;
     assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"], "zone_already_exists");
 
     let r = api
         .json(
-            "POST",
-            "/api/zones/example.com/records",
+            "PATCH",
+            "/api/zones/example.com/rrsets",
             &auth,
-            json!({"name": "www", "type": "a", "data": "192.0.2.1"}),
+            json!({"rrsets": [{"name": "www", "type": "A", "records": ["192.0.2.1"]}]}),
         )
         .await;
-    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
-    assert_eq!(
-        r.body,
-        json!({"id": r.body["id"], "name": "www.example.com", "type": "A", "ttl": 3600, "data": "192.0.2.1"})
-    );
-    let id = r.body["id"].as_i64().unwrap();
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"], "zone_not_active");
 
+    // The creation check counts against the cooldown.
+    api.checker.set(Ok(Delegation::Delegated));
     let r = api
-        .json(
-            "POST",
-            "/api/zones/example.com/records",
-            &auth,
-            json!({"name": "www", "type": "CNAME", "data": "x.example.net"}),
-        )
+        .json("POST", "/api/zones/example.com/verify", &auth, json!({}))
         .await;
-    assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    assert_eq!(r.body["error"], "cname_conflict");
-    assert!(r.body["message"].as_str().unwrap().contains("CNAME"));
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(r.body["error"], "check_rate_limited");
 
+    // Admin exemption activates without a check.
     let r = api
         .json(
             "PUT",
-            &format!("/api/zones/example.com/records/{id}"),
-            &auth,
-            json!({"name": "www", "type": "A", "ttl": 60, "data": "192.0.2.2"}),
+            "/admin/zones/example.com/activation",
+            &admin,
+            json!({"exempt": true}),
         )
         .await;
-    assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(r.body["ttl"], 60);
-
-    let r = api.get("/api/zones/example.com", &auth).await;
-    let records = r.body["records"].as_array().unwrap();
-    assert_eq!(
-        records
-            .iter()
-            .map(|r| r["type"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["NS", "A"]
-    );
-    assert_eq!(records[0]["data"], "ns1.auth.example.org.");
-
-    let del = |path: String| {
-        Request::builder()
-            .method("DELETE")
-            .uri(path)
-            .header("authorization", alice.as_str())
-            .body(Body::empty())
-            .unwrap()
-    };
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body["status"], "active");
+    assert_eq!(r.body["exempt"], true);
+    assert_eq!(r.body["owner"], "alice");
+    assert!(api.serves("example.com"));
     let r = api
-        .send(del(format!("/api/zones/example.com/records/{id}")))
-        .await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT);
-    let r = api
-        .send(del(format!("/api/zones/example.com/records/{id}")))
+        .json(
+            "PUT",
+            "/api/zones/example.com/activation",
+            &auth,
+            json!({"exempt": true}),
+        )
         .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert_eq!(r.body["error"], "record_not_found");
-    let r = api.send(del("/api/zones/example.com".into())).await;
+
+    // A delegated zone activates right away.
+    let r = api
+        .json("POST", "/api/zones", &auth, json!({"name": "alice.test"}))
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    assert_eq!(r.body["status"], "active");
+    assert_eq!(r.body["exempt"], false);
+    assert!(r.body["verified_at"].is_i64());
+    assert!(api.serves("alice.test"));
+}
+
+#[tokio::test]
+async fn rrsets_are_managed_through_patch() {
+    let (api, alice) = with_zone().await;
+    let auth = [("authorization", alice.as_str())];
+
+    let r = api.get("/api/zones/example.com/rrsets", &auth).await;
+    assert_eq!(
+        r.body[0],
+        json!({"name": "example.com.", "type": "NS", "ttl": 3600, "records": ["ns1.auth.example.org."]})
+    );
+    assert_eq!(r.body[1]["type"], "SOA");
+    assert_eq!(r.body.as_array().unwrap().len(), 2);
+
+    let r = api
+        .json(
+            "PATCH",
+            "/api/zones/example.com/rrsets",
+            &auth,
+            json!({"rrsets": [
+                {"name": "www", "type": "a", "ttl": 60, "records": ["192.0.2.1", "192.0.2.2"]},
+                {"name": "@", "type": "TXT", "records": ["hello world"]}
+            ]}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let a = r
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rr| rr["type"] == "A")
+        .unwrap();
+    assert_eq!(
+        *a,
+        json!({"name": "www.example.com.", "type": "A", "ttl": 60, "records": ["192.0.2.1", "192.0.2.2"]})
+    );
+    assert_eq!(
+        api.pdns
+            .zone("example.com")
+            .unwrap()
+            .contents("example.com.", "TXT"),
+        ["\"hello world\""]
+    );
+
+    let r = api
+        .json(
+            "PATCH",
+            "/api/zones/example.com/rrsets",
+            &auth,
+            json!({"rrsets": [{"name": "@", "type": "CNAME", "records": ["x.example.net."]}]}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.body["error"], "cname_at_apex");
+    assert!(r.body["message"].as_str().unwrap().contains("CNAME"));
+    let r = api
+        .json(
+            "PATCH",
+            "/api/zones/example.com/rrsets",
+            &auth,
+            json!({"rrsets": []}),
+        )
+        .await;
+    assert_eq!(r.body["error"], "empty_change");
+
+    let r = api
+        .json(
+            "PATCH",
+            "/api/zones/example.com/rrsets",
+            &auth,
+            json!({"rrsets": [{"name": "www", "type": "A", "changetype": "DELETE"}]}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert!(
+        r.body
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|rr| rr["type"] != "A")
+    );
+
+    let r = api.get("/api/zones/example.com", &auth).await;
+    assert_eq!(r.body["status"], "active");
+    assert_eq!(r.body["rrsets"].as_array().unwrap().len(), 3);
+
+    let r = api.send(delete("/api/zones/example.com", &auth)).await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);
-    assert!(!api.catalog.contains(&"example.com.".parse().unwrap()));
+    assert!(!api.serves("example.com"));
+    let r = api.get("/api/zones/example.com", &auth).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(r.body["error"], "zone_not_found");
 }
 
 #[tokio::test]
 async fn zones_are_private_and_scoped() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let alice = session(&api, "alice").await;
     let bob = session(&api, "bob").await;
     let r = api
@@ -476,7 +585,7 @@ async fn zones_are_private_and_scoped() {
     let r = api.get("/api/zones", &[("authorization", &key)]).await;
     assert_eq!(r.body.as_array().unwrap().len(), 1);
 
-    // The server's own domain is off limits.
+    // The server's own domain is off limits, and the base zone itself is invisible.
     let r = api
         .json(
             "POST",
@@ -486,31 +595,20 @@ async fn zones_are_private_and_scoped() {
         )
         .await;
     assert_eq!(r.body["error"], "zone_not_allowed");
+    let r = api
+        .get("/api/zones/auth.example.org", &[("authorization", &alice)])
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn zone_creation_is_admin_only_by_default() {
-    let api = Api::new(
-        ApiOptions {
-            allow_zone_creation: false,
-            ..options()
-        },
-        "127.0.0.1:1",
-    );
+async fn admin_assigns_zones_and_account_deletion_unpublishes_them() {
+    let api = Api::new(options(), "127.0.0.1:1").await;
+    api.checker.set(Ok(Delegation::Delegated));
     let alice = session(&api, "alice").await;
-    let r = api
-        .json(
-            "POST",
-            "/api/zones",
-            &[("authorization", &alice)],
-            json!({"name": "alice.test"}),
-        )
-        .await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN);
-    assert_eq!(r.body["error"], "zone_creation_disabled");
     assert_eq!(
-        api.get("/api/info", &[]).await.body["allow_zone_creation"],
-        false
+        api.get("/api/info", &[]).await.body["ns_target"],
+        "ns1.auth.example.org"
     );
 
     let admin = [("x-admin-key", "admin")];
@@ -526,6 +624,7 @@ async fn zone_creation_is_admin_only_by_default() {
         .await;
     assert_eq!(r.status, StatusCode::CREATED);
     assert_eq!(r.body["owner"], "alice");
+    assert_eq!(r.body["status"], "active");
     let r = api
         .json(
             "POST",
@@ -536,38 +635,50 @@ async fn zone_creation_is_admin_only_by_default() {
         .await;
     assert_eq!(r.body["error"], "user_not_found");
 
-    // The owner manages the assigned zone; admin sees it with its owner.
+    // The owner manages the assigned zone; admin sees the base zone and alice's with owners.
     let r = api
         .json(
-            "POST",
-            "/api/zones/alice.test/records",
+            "PATCH",
+            "/api/zones/alice.test/rrsets",
             &[("authorization", &alice)],
-            json!({"name": "@", "type": "TXT", "data": "hello world"}),
+            json!({"rrsets": [{"name": "@", "type": "TXT", "records": ["hello"]}]}),
         )
         .await;
-    assert_eq!(r.body["data"], "\"hello\" \"world\"");
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     let r = api.get("/admin/zones", &admin).await;
-    assert_eq!(r.body[0]["owner"], "alice");
+    let listed = r.body.as_array().unwrap();
+    assert_eq!(listed.len(), 2);
+    let base = listed.iter().find(|z| z["system"] == true).unwrap();
+    assert_eq!(base["name"], "auth.example.org");
+    assert!(base.get("owner").is_none());
+    let mine = listed.iter().find(|z| z["name"] == "alice.test").unwrap();
+    assert_eq!(mine["owner"], "alice");
+    let r = api
+        .send(delete("/admin/zones/auth.example.org", &admin))
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
 
     // Deleting the account removes the zone from DNS.
     let r = api
-        .send(
-            Request::builder()
-                .method("DELETE")
-                .uri("/api/profile")
-                .header("authorization", alice.as_str())
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .send(delete("/api/profile", &[("authorization", &alice)]))
         .await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);
-    assert!(!api.catalog.contains(&"alice.test.".parse().unwrap()));
-    assert_eq!(api.get("/admin/zones", &admin).await.body, json!([]));
+    assert!(!api.serves("alice.test"));
+    assert_eq!(
+        api.get("/admin/zones", &admin)
+            .await
+            .body
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
-/// An API with alice owning `example.com`; returns alice's session header value.
+/// An API with alice owning the active zone `example.com`; returns alice's session header.
 async fn with_zone() -> (Api, String) {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
+    api.checker.set(Ok(Delegation::Delegated));
     let alice = session(&api, "alice").await;
     let r = api
         .json(
@@ -578,6 +689,7 @@ async fn with_zone() -> (Api, String) {
         )
         .await;
     assert_eq!(r.status, StatusCode::CREATED);
+    assert_eq!(r.body["status"], "active");
     (api, alice)
 }
 
@@ -609,13 +721,18 @@ async fn dnssec_settings() {
         .await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(r.body["nsec_mode"], "nsec3");
-    assert!(r.body["ds"].as_str().unwrap().contains(" 13 2 "));
+    assert!(r.body["ds"][0].as_str().unwrap().contains(" 13 2 "));
     let r = api.get("/admin/zones/example.com/dnssec", &admin).await;
     assert_eq!(r.body["enabled"], true);
-    assert_eq!(
-        api.get("/api/zones/example.com", &auth).await.body["dnssec"],
-        true
-    );
+    let r = api
+        .json(
+            "PUT",
+            "/api/zones/example.com/dnssec",
+            &auth,
+            json!({"enabled": false}),
+        )
+        .await;
+    assert_eq!(r.body, json!({"enabled": false, "nsec_mode": "nsec"}));
 
     let bob = session(&api, "bob").await;
     let r = api
@@ -683,19 +800,12 @@ async fn transfer_settings_and_tsig_keys() {
     assert_eq!(keys.len(), 1);
     assert!(keys[0].get("secret").is_none());
 
-    let del = |path: &str, headers: &[(&str, &str)]| {
-        let mut req = Request::builder().method("DELETE").uri(path);
-        for (k, v) in headers {
-            req = req.header(*k, *v);
-        }
-        req.body(Body::empty()).unwrap()
-    };
     let path = "/api/zones/example.com/tsig-keys/xfr.example.com";
     assert_eq!(
-        api.send(del(path, &auth)).await.status,
+        api.send(delete(path, &auth)).await.status,
         StatusCode::NO_CONTENT
     );
-    let r = api.send(del(path, &auth)).await;
+    let r = api.send(delete(path, &auth)).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     assert_eq!(r.body["error"], "tsig_key_not_found");
 
@@ -713,7 +823,7 @@ async fn transfer_settings_and_tsig_keys() {
 
 #[tokio::test]
 async fn deleting_users_and_domains_clears_challenge_txt() {
-    let api = Api::new(options(), "127.0.0.1:1");
+    let api = Api::new(options(), "127.0.0.1:1").await;
     let admin = [("x-admin-key", "admin")];
     let txt = "a".repeat(43);
     let mut accounts = Vec::new();

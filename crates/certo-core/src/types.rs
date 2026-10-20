@@ -1,5 +1,3 @@
-use secrecy::SecretSlice;
-
 /// A registered account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
@@ -86,64 +84,38 @@ pub fn sanitize_fqdn(fqdn: &str) -> String {
         .map_or_else(|| fqdn.clone(), str::to_owned)
 }
 
-/// An authoritative zone hosted for a user.
+/// An authoritative zone served by `PowerDNS` and owned by a user (or by the server itself).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Zone {
     /// Row id.
     pub id: i64,
-    /// Owning user.
-    pub user_id: i64,
+    /// Owning user; `None` for the server's own base zone.
+    pub user_id: Option<i64>,
     /// Owner's username (set by queries that join it).
     pub owner: Option<String>,
     /// Zone apex, lowercase without trailing dot.
     pub name: String,
-    /// SOA serial; bumped on every change.
-    pub serial: u32,
-    /// Whether the zone is DNSSEC-signed.
-    pub dnssec: bool,
-    /// `nsec` or `nsec3`.
-    pub nsec_mode: String,
-    /// CIDRs allowed to transfer the zone without TSIG.
-    pub axfr_allow_from: Vec<String>,
+    /// Served by `PowerDNS` (delegation verified or exempt).
+    pub active: bool,
+    /// Activated by an administrator without a delegation check; never re-checked.
+    pub exempt: bool,
+    /// Unix seconds of the last successful delegation check.
+    pub verified_at: Option<i64>,
+    /// Unix seconds of the last delegation check.
+    pub last_check: Option<i64>,
+    /// Why the last check failed.
+    pub last_error: Option<String>,
+    /// Consecutive failed checks since the last success.
+    pub failed_checks: u32,
     /// Unix seconds.
     pub created_at: i64,
 }
 
-/// A resource record of a [`Zone`], in presentation format.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ZoneRecord {
-    /// Row id.
-    pub id: i64,
-    /// Owner name, lowercase without trailing dot.
-    pub name: String,
-    /// Record type mnemonic, e.g. `AAAA`.
-    pub rtype: String,
-    /// TTL in seconds.
-    pub ttl: u32,
-    /// RDATA in canonical presentation format.
-    pub data: String,
-}
-
-/// A zone's DNSSEC signing key.
-#[derive(Debug)]
-pub struct ZoneKey {
-    /// Algorithm mnemonic, e.g. `ECDSAP256SHA256`.
-    pub algorithm: String,
-    /// PKCS#8 private key.
-    pub private_key: SecretSlice<u8>,
-}
-
-/// A TSIG key allowed to transfer a zone.
-#[derive(Debug)]
-pub struct TsigKey {
-    /// Key name, lowercase without trailing dot.
-    pub name: String,
-    /// Algorithm, e.g. `hmac-sha256`.
-    pub algorithm: String,
-    /// Shared secret.
-    pub secret: SecretSlice<u8>,
-    /// Unix seconds.
-    pub created_at: i64,
+impl Zone {
+    /// Whether this is the server's own base zone.
+    pub const fn is_system(&self) -> bool {
+        self.user_id.is_none()
+    }
 }
 
 /// Exact length acme-dns requires for an `/update` TXT value.

@@ -348,7 +348,7 @@ dependencies = [
  "certo-api",
  "certo-core",
  "certo-db",
- "certo-dns",
+ "certo-pdns",
  "clap",
  "rlimit",
  "rustix",
@@ -368,7 +368,7 @@ dependencies = [
  "bcrypt",
  "certo-core",
  "certo-db",
- "certo-dns",
+ "certo-pdns",
  "http-body-util",
  "hyper-util",
  "instant-acme",
@@ -395,7 +395,6 @@ version = "0.0.1"
 dependencies = [
  "aws-lc-rs",
  "figment",
- "secrecy",
  "serde",
  "tempfile",
  "thiserror",
@@ -414,19 +413,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "certo-dns"
+name = "certo-pdns"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "axum",
+ "base64 0.23.1",
  "certo-core",
  "certo-db",
- "hickory-server",
+ "hickory-resolver",
  "ipnet",
+ "reqwest",
+ "rusqlite",
  "rustc-hash",
- "rustls-pki-types",
- "secrecy",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
- "time",
  "tokio",
  "tracing",
 ]
@@ -893,8 +897,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c480823ed7c2c5d0f09c41020cb6b7c28029ce60ec42dc942158dcf22f8e0a4d"
 dependencies = [
  "async-trait",
- "aws-lc-rs",
- "bitflags",
  "cfg-if",
  "data-encoding",
  "futures-channel",
@@ -904,12 +906,8 @@ dependencies = [
  "idna",
  "ipnet",
  "jni",
- "lru-cache",
- "parking_lot",
  "rand",
- "rustls-pki-types",
  "thiserror",
- "time",
  "tinyvec",
  "tokio",
  "tracing",
@@ -922,8 +920,6 @@ version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12b92608f679a6fa515dd1d15c1ff89443026e391200a2c840c7afcba482893d"
 dependencies = [
- "aws-lc-rs",
- "bitflags",
  "data-encoding",
  "idna",
  "ipnet",
@@ -932,10 +928,7 @@ dependencies = [
  "prefix-trie",
  "rand",
  "ring",
- "rustls-pki-types",
- "serde",
  "thiserror",
- "time",
  "tinyvec",
  "tracing",
  "url",
@@ -960,35 +953,10 @@ dependencies = [
  "parking_lot",
  "rand",
  "resolv-conf",
- "serde",
  "smallvec",
  "system-configuration",
  "thiserror",
  "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hickory-server"
-version = "0.26.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "950c2ad9ba2ad35d6890b725baff91305f65b87d7719a6c6071514dc70f13eeb"
-dependencies = [
- "async-trait",
- "bytes",
- "cfg-if",
- "data-encoding",
- "futures-util",
- "hickory-net",
- "hickory-proto",
- "hickory-resolver",
- "ipnet",
- "prefix-trie",
- "serde",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -1091,6 +1059,7 @@ version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -1098,7 +1067,9 @@ dependencies = [
  "http-body",
  "httparse",
  "hyper",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -1405,12 +1376,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "linked-hash-map"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1436,15 +1401,6 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
-
-[[package]]
-name = "lru-cache"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31e24f1ad8321ca0e8a1e0ac13f23cb668e6f5466c2c57319f6a5cf1cc8e3b1c"
-dependencies = [
- "linked-hash-map",
-]
 
 [[package]]
 name = "matchers"
@@ -1815,6 +1771,37 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "reqwest"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "sync_wrapper",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
 
 [[package]]
 name = "resolv-conf"
@@ -2305,6 +2292,9 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+dependencies = [
+ "futures-core",
+]
 
 [[package]]
 name = "synstructure"
@@ -2552,6 +2542,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tower-http"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "pin-project-lite",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "url",
+]
+
+[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2693,7 +2701,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
- "serde_derive",
 ]
 
 [[package]]
@@ -2776,6 +2783,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.79"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cbab34de2d982e9b48e18d216d04c4a6f641066ff19ffb699980f591ee3610e"
+dependencies = [
+ "js-sys",
+ "tokio",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen-macro"
 version = "0.2.129"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2805,6 +2823,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

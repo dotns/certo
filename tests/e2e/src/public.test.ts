@@ -17,7 +17,7 @@ describe("public", () => {
     expect(r.body.capabilities).toContain("acmedns");
     expect(r.body.capabilities).toContain("domain_management");
     expect(r.body.capabilities).toContain("zones");
-    expect(r.body.allow_zone_creation).toBe(true);
+    expect(r.body.ns_target).toBe(srv.baseDomain);
   });
 
   test("GET /llms.txt → 200 with content", async () => {

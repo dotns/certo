@@ -33,14 +33,14 @@ unreachable.
   "version": "v1.0.0",
   "base_domain": "s.example.com",
   "api_domain": "api.example.com",
-  "allow_zone_creation": false,
+  "ns_target": "s.example.com",
   "capabilities": ["multi_key","scoped_key","domain_management",
                    "wildcard_scope","account_deletion","acmedns","zones"]
 }
 ```
 `api_domain` falls back to `base_domain` when `api.api_domain` is unset.
-`allow_zone_creation` mirrors `api.allow_zone_creation`. Clients should key
-feature detection off `capabilities`, not the version.
+`ns_target` is the nameserver (`general.nsname`) a hosted zone must be delegated to
+before it is served.
 
 ### `POST /api/register`
 Body `{"username": "...", "password": "..."}` → `201 {"token","username"}`.
@@ -79,47 +79,61 @@ Require JWT or any API key; scope is enforced per request.
 
 ## Hosted zones
 
-Authoritative zones (forward or reverse) owned by one user. Require JWT or any API key; a
-scoped key only sees and manages zones its scope covers (`403 domain_not_in_scope`), and
-another user's zone answers `404 zone_not_found`. Zone names are given without the trailing
-dot and are returned lower-cased. Validation errors carry a human-readable `message`.
+Authoritative zones (forward or reverse) owned by one user and served by the bundled
+PowerDNS. Require JWT or any API key; a scoped key only sees and manages zones its scope
+covers (`403 domain_not_in_scope`), and another user's zone (or the base zone) answers
+`404 zone_not_found`. Zone names are given without the trailing dot and are returned
+lower-cased. Validation errors carry a human-readable `message`.
+
+A new zone is `pending`: nothing is served and rrsets cannot be changed
+(`409 zone_not_active`). It becomes `active` once certo finds `ns_target` (from
+`GET /api/info`, i.e. `general.nsname`) among the nameservers the parent publishes for it —
+checked at creation, on `verify`, and hourly; active zones are re-checked daily and
+deactivated after 7 consecutive failures (records are kept and restored on re-activation).
+Administrators can exempt a zone from the check (see [Admin](#admin)).
 
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/zones` | `200 [zone]` |
-| `POST` | `/api/zones` | `201 zone`. Body `{"name"}`. Needs `api.allow_zone_creation` (`403 zone_creation_disabled`). The zone gets an apex NS for `general.nsname`. Errors: `400 invalid_name`, `403 zone_not_allowed` (at/under the base domain, covering a static record, or overlapping another user's zone), `409 zone_already_exists` |
-| `GET` | `/api/zones/:zone` | `200 zone` with `records` |
-| `DELETE` | `/api/zones/:zone` | `204` — removes the zone, its records and keys; it stops resolving immediately |
-| `GET` | `/api/zones/:zone/records` | `200 [record]` |
-| `POST` | `/api/zones/:zone/records` | `201 record`. Body `{"name","type","ttl"?,"data"}` |
-| `PUT` | `/api/zones/:zone/records/:id` | `200 record`. Same body; replaces the record. `404 record_not_found` |
-| `DELETE` | `/api/zones/:zone/records/:id` | `204`. `404 record_not_found` |
-| `GET` | `/api/zones/:zone/dnssec` | `200 {"enabled","nsec_mode","dnskey"?,"ds"?}` |
+| `POST` | `/api/zones` | `201 zone`. Body `{"name"}`. Runs the delegation check immediately, so a correctly delegated zone is `active` in the response. Errors: `400 invalid_name`, `403 zone_not_allowed` (at/under the base domain, or overlapping another user's zone), `409 zone_already_exists` |
+| `GET` | `/api/zones/:zone` | `200 zone` with `rrsets` when active |
+| `DELETE` | `/api/zones/:zone` | `204` — removes the zone from PowerDNS with its records and keys; it stops resolving immediately |
+| `POST` | `/api/zones/:zone/verify` | `200 zone` after a fresh delegation check. `429 check_rate_limited` (one check per minute per zone), `503 check_failed` when the check could not be completed (`message` says why) |
+| `GET` | `/api/zones/:zone/rrsets` | `200 [rrset]`. `409 zone_not_active` |
+| `PATCH` | `/api/zones/:zone/rrsets` | `200 [rrset]` (the zone after the change). Body `{"rrsets": [change]}` |
+| `GET` | `/api/zones/:zone/dnssec` | `200 {"enabled","nsec_mode","dnskey"?,"ds"?:[string]}` |
 | `PUT` | `/api/zones/:zone/dnssec` | `200` same shape. Body `{"enabled","nsec_mode"?}`; `nsec_mode` is `nsec` (default) or `nsec3` (`400 invalid_nsec_mode`). Enabling creates an ECDSAP256SHA256 key; disabling deletes it |
-| `GET` | `/api/zones/:zone/axfr` | `200 {"allow_from":[cidr],"tsig_keys":[{"name","algorithm","created_at"}]}` |
+| `GET` | `/api/zones/:zone/axfr` | `200 {"allow_from":[cidr],"tsig_keys":[{"name","algorithm"}]}` |
 | `PUT` | `/api/zones/:zone/axfr` | `200` same shape. Body `{"allow_from"}`: addresses or CIDRs allowed to transfer without TSIG; empty denies. `400 invalid_cidr` |
-| `POST` | `/api/zones/:zone/tsig-keys` | `201 {"name","algorithm","created_at","secret"}`. Body `{"name","algorithm"?}`; `hmac-sha256` (default), `hmac-sha384`, `hmac-sha512` (`400 invalid_algorithm`). `secret` is base64 and returned **only here**. `400 tsig_key_exists` |
+| `POST` | `/api/zones/:zone/tsig-keys` | `201 {"name","algorithm","secret"}`. Body `{"name","algorithm"?}`; `hmac-sha256` (default), `hmac-sha384`, `hmac-sha512` (`400 invalid_algorithm`). `secret` is base64 and returned **only here**. `400 tsig_key_exists` |
 | `DELETE` | `/api/zones/:zone/tsig-keys/:name` | `204`. `404 tsig_key_not_found` |
 
 ```json
-zone   {"name": "23.251.162.in-addr.arpa", "serial": 1792202451, "dnssec": false,
-        "created_at": 1792202451, "records": [record]}
-record {"id": 7, "name": "5.23.251.162.in-addr.arpa", "type": "PTR", "ttl": 3600,
-        "data": "host.example.com."}
+zone   {"name": "23.251.162.in-addr.arpa", "status": "active", "exempt": false, "system": false,
+        "verified_at": 1792202451, "last_check": 1792202451, "last_error": null,
+        "failed_checks": 0, "created_at": 1792202400, "ns_target": "s.example.com",
+        "rrsets": [rrset]}
+rrset  {"name": "5.23.251.162.in-addr.arpa.", "type": "PTR", "ttl": 3600,
+        "records": ["host.example.com."]}
+change {"name": "5", "type": "PTR", "ttl": 3600, "changetype": "REPLACE",
+        "records": ["host.example.com."]}
 ```
 
-Records:
+Rrsets (the PowerDNS model: one entry per owner name and type):
 
-- `name` is relative (`www`, `@` for the apex) or absolute within the zone.
-- `type`: `A`, `AAAA`, `CAA`, `CNAME`, `MX`, `NS`, `PTR`, `SRV`, `TXT`; `data` in zone-file
-  presentation format (`10 mail.example.com`, `"v=spf1 -all"`, `0 issue "letsencrypt.org"`).
-  Names in `data` are made absolute; unquoted TXT is one string, longer strings are split
-  at 255 bytes.
-- `ttl` defaults to 3600, maximum 2147483647.
-- PTR only in `in-addr.arpa` / `ip6.arpa` zones; CNAME not at the apex and not next to
-  other records at the same name.
-- Every change bumps the SOA serial and is served immediately (and re-signed when DNSSEC is
-  on).
+- `name` in a change is relative (`www`, `@` for the apex) or absolute within the zone
+  (`400 name_outside_zone`); rrsets are returned with absolute names.
+- `type`: `A`, `AAAA`, `CAA`, `CNAME`, `MX`, `NS`, `PTR`, `SRV`, `TXT`; `records` in
+  zone-file presentation format (`10 mail.example.com.`, `"v=spf1 -all"`,
+  `0 issue "letsencrypt.org"`). Plain TXT values are quoted for you.
+- `changetype` is `REPLACE` (default; `records` replaces every record of that name and
+  type) or `DELETE` (removes the rrset; `records` ignored). `ttl` defaults to 3600 and
+  applies to the whole rrset. A body without changes is `400 empty_change`.
+- PTR only in `in-addr.arpa` / `ip6.arpa` zones; CNAME not at the apex and alone at its
+  name; a `REPLACE` with no records (`400 invalid_data`). Anything PowerDNS refuses is
+  `400 pdns_rejected` with its message.
+- The SOA is maintained by PowerDNS; every change bumps its serial and is served
+  immediately (and signed when DNSSEC is on).
 
 ## httpreq protocol
 
@@ -205,9 +219,10 @@ All require `X-Admin-Key`. Disabled while `api.admin_key` is empty
 | `POST` | `/admin/domains` | `201` — body `{"user_id","domain"}`. `404 user_not_found`, `409 domain_already_exists` |
 | `DELETE` | `/admin/domains/:domain` | `204` — removes that domain from every user |
 | `GET` | `/admin/records` | `200` all TXT records |
-| `GET` | `/admin/zones` | `200` all zones, with `owner` |
-| `POST` | `/admin/zones` | `201` — body `{"user_id","name"}`, regardless of `api.allow_zone_creation`. `400` when a field is missing, `404 user_not_found` |
-| any | `/admin/zones/:zone/...` | Every per-zone route of [Hosted zones](#hosted-zones), on any user's zone |
+| `GET` | `/admin/zones` | `200` all zones, with `owner`; includes the base zone (`"system": true`, no owner) |
+| `POST` | `/admin/zones` | `201` — body `{"user_id","name"}`; the zone starts the same activation cycle as a user-created one. `400` when a field is missing, `404 user_not_found` |
+| `PUT` | `/admin/zones/:zone/activation` | `200 zone` — body `{"exempt": true}` serves the zone without a delegation check and skips re-checks; `false` returns it to the normal cycle. The base zone cannot be de-exempted (`403 zone_not_allowed`) |
+| any | `/admin/zones/:zone/...` | Every per-zone route of [Hosted zones](#hosted-zones), on any user's zone and on the base zone (which cannot be deleted) |
 
 ## Error codes
 
@@ -235,14 +250,14 @@ validation errors.
 | `invalid_id` / `invalid_user_id` | Non-numeric path id |
 | `name_required` | Key creation without a name |
 | `user_not_found` | Unknown `user_id` (admin) |
-| `zone_creation_disabled` | Self-service zone creation is off (`api.allow_zone_creation = false`) |
-| `zone_not_allowed` | Zone name at/under the base domain, covering a static record, or overlapping another user's zone |
+| `zone_not_allowed` | Zone name at/under the base domain or overlapping another user's zone; base zone deletion or de-exemption |
 | `zone_already_exists` | Zone name taken |
-| `zone_not_found` / `record_not_found` / `tsig_key_not_found` | No such zone (or not yours), record or TSIG key |
-| `invalid_name` / `name_outside_zone` / `name_reserved` | Bad zone or owner name; owner not inside the zone; owner inside the server's own domain |
-| `unsupported_type` / `invalid_data` / `invalid_ttl` | Record type not supported; RDATA does not parse; TTL too large |
-| `ptr_outside_reverse_zone` / `cname_at_apex` / `cname_conflict` | Record placement rules |
+| `zone_not_found` / `tsig_key_not_found` | No such zone (or not yours) or TSIG key |
+| `zone_not_active` | The zone is pending delegation; rrsets cannot be changed yet |
+| `check_rate_limited` / `check_failed` | `verify` called within a minute of the last check; the delegation check could not be completed |
+| `invalid_name` / `name_outside_zone` | Bad zone or owner name; owner not inside the zone |
+| `invalid_data` / `empty_change` / `pdns_rejected` | Record type or placement rule violated (PTR, CNAME, empty REPLACE); no changes in the body; PowerDNS refused the change (`message` has its text) |
 | `invalid_nsec_mode` / `invalid_cidr` / `invalid_algorithm` / `tsig_key_exists` | DNSSEC and transfer settings |
 | `admin_key_not_configured` | Admin API disabled |
 | `invalid_admin_key` | Wrong admin key |
-| `db_error` / `internal_error` / `token_error` / `zone_error` | Server-side failure |
+| `db_error` / `internal_error` / `token_error` / `zone_error` | Server-side failure (`zone_error`: certo's database or PowerDNS) |
