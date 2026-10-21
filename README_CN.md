@@ -73,12 +73,14 @@ services:
 ```toml
 [general]
 listen = "0.0.0.0:53"
-domain = "s.dnsall.com"
-nsname = "s.dnsall.com"
+domain = "dnsall.com"          # certo 提供解析的 zone
+acme_domain = "s.dnsall.com"   # 挑战记录:<子域>.s.dnsall.com(默认同 domain)
+nsname = "ns1.dnsall.com"
 nsadmin = "admin.dnsall.com"
 records = [
-    "s.dnsall.com. A 1.2.3.4",
-    "s.dnsall.com. NS s.dnsall.com.",
+    "dnsall.com. A 1.2.3.4",
+    "dnsall.com. NS ns1.dnsall.com.",
+    "ns1.dnsall.com. A 1.2.3.4",
 ]
 
 [database]
@@ -312,7 +314,8 @@ _acme-challenge.example.com  CNAME  a1b2c3d4.s.dnsall.com
 
 | 区段 | 键 | 说明 | 默认值 |
 |------|-----|------|--------|
-| general | domain | 基础域名,记录位于 `<子域>.<domain>` | 必填 |
+| general | domain | certo 提供解析的 zone(基础 zone) | 必填 |
+| general | acme_domain | 位于其中的挑战域名,记录位于 `<子域>.<acme_domain>` | 同 `domain` |
 | general | nsname | SOA/NS 应答中使用的名称 | 必填 |
 | general | listen | DNS 监听地址,如 `:53` | 必填 |
 | database | engine | `sqlite`(仅支持此项) | `sqlite` |

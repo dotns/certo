@@ -121,12 +121,13 @@ async fn zones_of_other_owners_may_not_overlap() {
         Err(DbError::Conflict("zone overlap"))
     ));
     db.create_zone(Some(bob.id), "example.org").await.unwrap();
-    // The base zone counts as another owner for everyone.
+    // The base zone (no owner) never counts as an overlap: the zone service refuses names
+    // under it, and an ancestor (the owner's apex above the challenge domain) is allowed.
     db.create_zone(None, "dns.example.net").await.unwrap();
-    assert!(matches!(
-        db.create_zone(Some(bob.id), "x.dns.example.net").await,
-        Err(DbError::Conflict("zone overlap"))
-    ));
+    db.create_zone(Some(bob.id), "example.net").await.unwrap();
+    db.create_zone(Some(bob.id), "x.dns.example.net")
+        .await
+        .unwrap();
 }
 
 const V3: &str = "

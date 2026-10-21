@@ -32,6 +32,7 @@ unreachable.
   "provider": "ns-certo",
   "version": "v1.0.0",
   "base_domain": "s.example.com",
+  "base_zone": "example.com",
   "api_domain": "api.example.com",
   "ns_target": "s.example.com",
   "capabilities": ["multi_key","scoped_key","domain_management",
@@ -40,7 +41,8 @@ unreachable.
 ```
 `api_domain` falls back to `base_domain` when `api.api_domain` is unset.
 `ns_target` is the nameserver (`general.nsname`) a hosted zone must be delegated to
-before it is served.
+before it is served. `base_zone` is the zone certo serves (`general.domain`); `base_domain`
+(`general.acme_domain`) is the challenge domain inside it.
 
 ### `POST /api/register`
 Body `{"username": "...", "password": "..."}` → `201 {"token","username"}`.

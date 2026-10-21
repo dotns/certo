@@ -14,10 +14,11 @@ produces a useless binding.
 |---|---|---|---|
 | `listen` | string | **required** | DNS listen address handed to `pdns_server`, e.g. `127.0.0.1:53`; `:53` binds all interfaces. Empty aborts startup |
 | `protocol` | string | — | Ignored since PowerDNS always serves UDP and TCP; accepted so older config files keep loading |
-| `domain` | string | **required in practice** | Base domain (the base zone); challenge records live at `<subdomain>.<domain>` |
+| `domain` | string | **required in practice** | The zone certo is authoritative for (the base zone), e.g. `example.com`; also the name of certo's own certificate when `api.tls = letsencrypt*` |
+| `acme_domain` | string | `domain` | Challenge domain inside `domain`: challenge records live at `<subdomain>.<acme_domain>`, e.g. `s.example.com`. Must equal `domain` or be a name under it; anything else aborts startup |
 | `nsname` | string | **required in practice** | Nameserver name: SOA MNAME and apex NS of the base zone and of every hosted zone, and the target a hosted zone must be delegated to (`ns_target` in `GET /api/info`) |
 | `nsadmin` | string | — | SOA admin address; `@` is written as `.` (e.g. `admin.example.com`) |
-| `records` | []string | empty | Records seeded into the base zone **when it is first created** (zone-file syntax, inside the base domain). Later changes are made through the admin zone API, not by editing this list |
+| `records` | []string | empty | Records seeded into the base zone **when it is first created** (zone-file syntax, inside `zone`). Later changes are made through the admin zone API, not by editing this list |
 | `debug` | bool | `false` | Accepted for compatibility; use `logconfig.loglevel = "debug"` for verbose logs |
 
 `domain` and `nsname` are not validated at load time, but nothing resolves correctly
@@ -102,12 +103,14 @@ see [architecture.md](architecture.md#authorization-model).
 ```toml
 [general]
 listen = "0.0.0.0:53"
-domain = "s.example.com"
-nsname = "s.example.com"
+domain = "example.com"        # the zone certo serves
+acme_domain = "s.example.com" # challenge names: <subdomain>.s.example.com (omit to use domain)
+nsname = "ns1.example.com"
 nsadmin = "admin.example.com"
 records = [
-    "s.example.com. A 198.51.100.1",
-    "s.example.com. NS s.example.com.",
+    "example.com. A 198.51.100.1",
+    "example.com. NS ns1.example.com.",
+    "ns1.example.com. A 198.51.100.1",
 ]
 
 [database]

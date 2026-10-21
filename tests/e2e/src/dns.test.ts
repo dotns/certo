@@ -5,12 +5,16 @@ let srv: Server;
 beforeAll(async () => { srv = await ensureServer(); });
 
 describe("DNS server (PowerDNS)", () => {
-  test("base domain A and NS records resolve authoritatively", () => {
+  test("base zone A and NS records resolve authoritatively", () => {
+    expect(digA(srv.zone, srv.dnsPort)).toContain("127.0.0.1");
     expect(digA(srv.baseDomain, srv.dnsPort)).toContain("127.0.0.1");
-    const ns = dig(srv.baseDomain, "NS", srv.dnsPort);
+    const ns = dig(srv.zone, "NS", srv.dnsPort);
     expect(ns.authoritative).toBe(true);
     expect(ns.answers).toEqual([`NS ${srv.baseDomain}.`]);
-    expect(dig(srv.baseDomain, "SOA", srv.dnsPort).answers[0]).toStartWith(`SOA ${srv.baseDomain}. admin.${srv.baseDomain}.`);
+    expect(dig(srv.zone, "SOA", srv.dnsPort).answers[0]).toStartWith(`SOA ${srv.baseDomain}. admin.${srv.baseDomain}.`);
+    // The challenge domain is a name inside the zone, not a zone of its own.
+    expect(dig(srv.baseDomain, "SOA", srv.dnsPort).answers).toEqual([]);
+    expect(dig(srv.baseDomain, "SOA", srv.dnsPort).authority).toEqual(["SOA"]);
   });
 
   test("names outside every zone are refused", () => {

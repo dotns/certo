@@ -63,7 +63,7 @@ describe("hosted zones", () => {
     // Lifting the exemption keeps the zone active until the daily checks fail.
     const normal = await req("PUT", `/admin/zones/${name}/activation`, { headers: adminHdr(), json: { exempt: false } });
     expect(normal.body).toMatchObject({ status: "active", exempt: false });
-    const base = await req("PUT", `/admin/zones/${srv.baseDomain}/activation`, { headers: adminHdr(), json: { exempt: false } });
+    const base = await req("PUT", `/admin/zones/${srv.zone}/activation`, { headers: adminHdr(), json: { exempt: false } });
     expect(base.status).toBe(403);
   });
 
@@ -158,7 +158,9 @@ describe("hosted zones", () => {
     expect(child.body.error).toBe("zone_not_allowed");
     const own = await req("POST", "/api/zones", { token: owner.token, json: { name: `x.${srv.baseDomain}` } });
     expect(own.body.error).toBe("zone_not_allowed");
-    expect((await req("GET", `/api/zones/${srv.baseDomain}`, { token: owner.token })).status).toBe(404);
+    expect((await req("GET", `/api/zones/${srv.zone}`, { token: owner.token })).status).toBe(404);
+    const apex = await req("POST", "/api/zones", { token: owner.token, json: { name: srv.zone } });
+    expect(apex.status, apex.text).toBe(403);
 
     const key = await req("POST", "/api/keys", { token: owner.token, json: { name: "z", scope: ["*.elsewhere.test"] } });
     const scoped = await req("GET", `/api/zones/${name}`, { token: key.body.key });
@@ -179,9 +181,9 @@ describe("hosted zones", () => {
 
     const all = await req("GET", "/admin/zones", { headers: adminHdr() });
     const base = all.body.find((z: any) => z.system);
-    expect(base).toMatchObject({ name: srv.baseDomain, status: "active", exempt: true });
+    expect(base).toMatchObject({ name: srv.zone, status: "active", exempt: true });
     expect(base.owner).toBeUndefined();
-    expect((await req("DELETE", `/admin/zones/${srv.baseDomain}`, { headers: adminHdr() })).status).toBe(403);
+    expect((await req("DELETE", `/admin/zones/${srv.zone}`, { headers: adminHdr() })).status).toBe(403);
 
     // Deleting the account unpublishes its zones.
     await req("PUT", `/admin/zones/${name}/activation`, { headers: adminHdr(), json: { exempt: true } });

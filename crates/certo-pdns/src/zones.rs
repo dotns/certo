@@ -38,8 +38,12 @@ const TSIG_ALLOW_AXFR: &str = "TSIG-ALLOW-AXFR";
 /// Server-wide zone rules.
 #[derive(Debug, Clone)]
 pub struct ZonePolicy {
-    /// The server's own (challenge) domain; user zones may not be at or under it.
+    /// The challenge domain (`general.acme_domain`): challenge names live at
+    /// `<subdomain>.<base_domain>`.
     pub base_domain: String,
+    /// The zone certo itself serves (`general.domain`); contains `base_domain`. User zones
+    /// may not be at or under it.
+    pub base_zone: String,
     /// The nameserver delegations must point at; also the apex NS of new zones.
     pub nsname: String,
 }
@@ -250,7 +254,7 @@ impl Zones {
     /// Creates the server's own zone on first start, seeded from the config record lines;
     /// an existing zone is left untouched.
     pub async fn ensure_base_zone(&self, seed: &[String]) -> Result<(), ZoneOpError> {
-        let base = &self.policy.base_domain;
+        let base = &self.policy.base_zone;
         match self.db.zone(base).await {
             Ok(_) => {}
             Err(DbError::NotFound(_)) => {
@@ -273,7 +277,7 @@ impl Zones {
                 Some(rec) if names::inside(&rec.0, base) => records.push(rec),
                 Some((name, ..)) => error!(
                     record = %line,
-                    "config record {name} is outside the base domain; create a hosted zone for it"
+                    "config record {name} is outside the base zone; create a hosted zone for it"
                 ),
                 None => error!(record = %line, "could not parse config record"),
             }
@@ -322,7 +326,7 @@ impl Zones {
         let values = self.db.txt_for_domain(&name).await?;
         self.client
             .patch_rrsets(
-                &self.policy.base_domain,
+                &self.policy.base_zone,
                 &[Self::challenge_rrset(&name, &values)],
             )
             .await?;
@@ -331,8 +335,8 @@ impl Zones {
 
     /// Makes the base zone's challenge TXT rrsets match the database (startup).
     pub async fn reconcile_txt(&self) -> Result<usize, ZoneOpError> {
-        let base = &self.policy.base_domain;
-        let own = format!("_acme-challenge.{base}.");
+        let base = &self.policy.base_zone;
+        let own = format!("_acme-challenge.{}.", self.policy.base_zone);
         let served = self
             .client
             .zone(base)
@@ -360,13 +364,14 @@ impl Zones {
         Ok(n)
     }
 
-    /// Sets (or clears) the DNS-01 token for certo's own certificate.
+    /// Sets (or clears) the DNS-01 token for certo's own certificate, issued for the
+    /// base zone name.
     pub async fn set_own_challenge(&self, value: Option<&str>) -> Result<(), ZoneOpError> {
-        let name = format!("_acme-challenge.{}", self.policy.base_domain);
+        let name = format!("_acme-challenge.{}", self.policy.base_zone);
         let values: Vec<String> = value.map(str::to_owned).into_iter().collect();
         self.client
             .patch_rrsets(
-                &self.policy.base_domain,
+                &self.policy.base_zone,
                 &[Self::challenge_rrset(&name, &values)],
             )
             .await?;
@@ -378,8 +383,8 @@ impl Zones {
     /// Creates a pending zone and runs its first delegation check.
     pub async fn create(&self, user_id: Option<i64>, name: &str) -> Result<Zone, ZoneOpError> {
         let name = names::parse_zone_name(name)?;
-        if names::inside(&name, &self.policy.base_domain) {
-            return Err(ZoneOpError::NotAllowed("inside the server's own domain"));
+        if names::inside(&name, &self.policy.base_zone) {
+            return Err(ZoneOpError::NotAllowed("inside the server's own zone"));
         }
         let zone = self.db.create_zone(user_id, &name).await?;
         match self.run_check(&zone).await {

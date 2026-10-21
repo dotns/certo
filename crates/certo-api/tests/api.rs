@@ -51,6 +51,7 @@ impl Api {
         let checker = Arc::new(ScriptedChecker::default());
         let policy = ZonePolicy {
             base_domain: "auth.example.org".into(),
+            base_zone: "auth.example.org".into(),
             nsname: "ns1.auth.example.org".into(),
         };
         let zones = Zones::new(

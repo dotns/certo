@@ -41,6 +41,8 @@ export interface Server {
   apiBase: string;
   dnsPort: number;
   baseDomain: string;
+  /** The zone certo serves; the challenge domain is a name inside it. */
+  zone: string;
   adminKey: string;
   /** Data directory holding `certo.db` and `pdns/`. */
   dir: string;
@@ -53,6 +55,7 @@ export interface StartOpts {
   apiPort?: number;
   dnsPort?: number;
   baseDomain?: string;
+  zone?: string;
   adminKey?: string;
 }
 
@@ -81,6 +84,8 @@ export async function startServer(opts: StartOpts = {}): Promise<Server> {
   const dnsPort = opts.dnsPort ?? (await freePort());
   const pdnsApiPort = await freePort();
   const baseDomain = opts.baseDomain ?? "s.example.test";
+  // Default layout: certo serves the apex and the challenge names live one label below.
+  const zone = opts.zone ?? baseDomain.replace(/^[^.]+\./, "");
   const adminKey = opts.adminKey ?? "e2e-admin-key";
 
   const bin = buildServer();
@@ -88,10 +93,11 @@ export async function startServer(opts: StartOpts = {}): Promise<Server> {
   const config = [
     "[general]",
     `listen = "127.0.0.1:${dnsPort}"`,
-    `domain = "${baseDomain}"`,
+    `domain = "${zone}"`,
+    `acme_domain = "${baseDomain}"`,
     `nsname = "${baseDomain}"`,
     `nsadmin = "admin.${baseDomain}"`,
-    `records = ["${baseDomain}. A 127.0.0.1", "${baseDomain}. NS ${baseDomain}."]`,
+    `records = ["${zone}. A 127.0.0.1", "${baseDomain}. A 127.0.0.1", "${zone}. NS ${baseDomain}."]`,
     "",
     "[database]",
     `engine = "sqlite"`,
@@ -128,6 +134,7 @@ export async function startServer(opts: StartOpts = {}): Promise<Server> {
     apiBase,
     dnsPort,
     baseDomain,
+    zone,
     adminKey,
     dir,
     async restart() {

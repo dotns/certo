@@ -12,7 +12,7 @@ pub(crate) const BCRYPT_COST: u32 = 10;
 
 /// Settings the HTTP API needs, extracted from the server config.
 pub struct ApiOptions {
-    /// `general.domain`: base domain for internal challenge names.
+    /// `general.acme_domain`: base domain for internal challenge names.
     pub base_domain: String,
     /// `api.api_domain`, falling back to the base domain.
     pub api_domain: String,
@@ -66,7 +66,7 @@ impl ApiOptions {
             None
         };
         Self {
-            base_domain: cfg.general.domain.clone(),
+            base_domain: cfg.general.acme_domain.clone(),
             api_domain: if api.api_domain.is_empty() {
                 cfg.general.domain.clone()
             } else {

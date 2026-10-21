@@ -34,7 +34,7 @@ describe("restart", () => {
     // pdns data lost: the base zone and the challenge records come back from certo's DB.
     rmSync(join(srv.dir, "pdns", "pdns.sqlite3"), { force: true });
     await srv.restart();
-    expect(dig(srv.baseDomain, "SOA", srv.dnsPort).authoritative).toBe(true);
+    expect(dig(srv.zone, "SOA", srv.dnsPort).authoritative).toBe(true);
     expect(digTxt(fqdn, srv.dnsPort)).toEqual(["survives-restart"]);
     const clean = await req("POST", "/cleanup", {
       basic: { user: username, pass: apiKey },

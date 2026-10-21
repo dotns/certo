@@ -97,8 +97,11 @@ pub struct General {
     pub listen: String,
     /// `both`, `both4`, `both6`, `udp`, `udp4`, `udp6`, `tcp`, `tcp4` or `tcp6`.
     pub protocol: String,
-    /// Base domain.
+    /// Zone certo is authoritative for (the base zone).
     pub domain: String,
+    /// Challenge domain inside `domain`: challenge records live at
+    /// `<subdomain>.<acme_domain>`. Empty means `domain` itself.
+    pub acme_domain: String,
     /// SOA MNAME.
     pub nsname: String,
     /// SOA RNAME.
@@ -218,6 +221,25 @@ impl Config {
         if self.api.acme_cache_dir.is_empty() {
             "data/certs".clone_into(&mut self.api.acme_cache_dir);
         }
+        let domain = self
+            .general
+            .domain
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        let acme = self
+            .general
+            .acme_domain
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if acme.is_empty() {
+            self.general.acme_domain = domain;
+        } else if acme != domain && !acme.ends_with(&format!(".{domain}")) {
+            return Err(ConfigError::Invalid(format!(
+                "general.acme_domain {acme:?} must be inside general.domain {domain:?}"
+            )));
+        } else {
+            self.general.acme_domain = acme;
+        }
         Ok(self)
     }
 }
@@ -256,6 +278,29 @@ mod tests {
         assert_eq!(cfg.api.tls, TlsMode::None);
         assert_eq!(cfg.logconfig.logformat, "json");
         assert_eq!(cfg.api.allow_registration, Some(true));
+    }
+
+    #[test]
+    fn acme_domain_defaults_to_the_domain_and_must_be_inside_it() {
+        let base = "[database]\nconnection = \"test.db\"\n";
+        let cfg = load(&format!("{base}[general]\ndomain = \"example.com\"")).unwrap();
+        assert_eq!(cfg.general.acme_domain, "example.com");
+        let cfg = load(&format!(
+            "{base}[general]\ndomain = \"Example.com.\"\nacme_domain = \"S.example.com.\""
+        ))
+        .unwrap();
+        assert_eq!(cfg.general.acme_domain, "s.example.com");
+        let cfg = load(&format!(
+            "{base}[general]\ndomain = \"example.com\"\nacme_domain = \"example.com\""
+        ))
+        .unwrap();
+        assert_eq!(cfg.general.acme_domain, "example.com");
+        assert!(
+            load(&format!(
+                "{base}[general]\ndomain = \"example.com\"\nacme_domain = \"s.example.org\""
+            ))
+            .is_err()
+        );
     }
 
     #[test]

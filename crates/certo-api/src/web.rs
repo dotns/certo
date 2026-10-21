@@ -89,6 +89,7 @@ pub(crate) async fn info(State(state): State<AppState>) -> Json<serde_json::Valu
         "provider": "ns-certo",
         "version": certo_core::VERSION,
         "base_domain": state.opts.base_domain,
+        "base_zone": state.zones.policy().base_zone,
         "api_domain": state.opts.api_domain,
         "ns_target": state.zones.policy().nsname,
         "capabilities": [

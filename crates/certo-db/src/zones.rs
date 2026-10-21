@@ -27,10 +27,12 @@ fn zone_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Zone> {
     })
 }
 
-/// Rejects a zone of another owner that is an ancestor or descendant of `name`.
+/// Rejects a zone of another user that is an ancestor or descendant of `name`. The base
+/// zone (no owner) is not considered: names under it are refused by the zone service and
+/// an ancestor of it is only ever activated by whoever controls its delegation.
 fn check_overlap(tx: &Transaction<'_>, user_id: Option<i64>, name: &str) -> Result<(), DbError> {
     let zones: Vec<(Option<i64>, String)> = tx
-        .prepare("SELECT user_id, name FROM zones")?
+        .prepare("SELECT user_id, name FROM zones WHERE user_id IS NOT NULL")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     let inside = |child: &str, parent: &str| child.ends_with(&format!(".{parent}"));

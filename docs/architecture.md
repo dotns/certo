@@ -108,13 +108,20 @@ log. Names outside every zone answer `REFUSED` (PowerDNS behaviour; the former s
 
 ### Base zone
 
-`general.domain` is a PowerDNS zone like any other. `ensure_base_zone` creates it at first
-start with the apex NS (`general.nsname`) and the parsed `general.records` lines that fall
-inside the base domain (others are logged as errors); an existing zone is left alone, so
-`general.records` is a first-start seed. The base zone row in `zones` has `user_id = NULL`;
-only admin routes see it (`system: true`), it is always exempt and cannot be deleted
-(`403 zone_not_allowed`). `_acme-challenge.<base>` for certo's own certificate is a TXT
-rrset write on this zone.
+`general.domain` is a PowerDNS zone like any other.
+`ensure_base_zone` creates it at first start with the apex NS (`general.nsname`) and the
+parsed `general.records` lines that fall inside it (others are logged as errors); an
+existing zone is left alone, so `general.records` is a first-start seed. The base zone row
+in `zones` has `user_id = NULL`; only admin routes see it (`system: true`), it is always
+exempt and cannot be deleted (`403 zone_not_allowed`).
+
+The challenge domain `general.acme_domain` (default: the zone itself) is a name inside that
+zone: challenge TXT rrsets `<subdomain>.<acme_domain>` are rrset writes on the base zone,
+as is `_acme-challenge.<domain>` for certo's own certificate. A typical layout serves
+`example.com` as the base zone with its ordinary A/MX records and keeps challenges under
+`s.example.com`, so the registrar delegation points at `example.com` only.
+`ZonePolicy { base_domain, base_zone, nsname }` carries the two names (`base_domain` is the
+challenge domain); user zones may not be at or under `base_zone`.
 
 ### Hosted zones
 

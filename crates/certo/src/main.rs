@@ -76,7 +76,8 @@ async fn start_zones(config: &Config, db: Db) -> anyhow::Result<(Supervisor, Zon
     };
     let checker = DnsDelegationChecker::new(resolver).context("cannot set up the resolver")?;
     let policy = ZonePolicy {
-        base_domain: config.general.domain.clone(),
+        base_domain: config.general.acme_domain.clone(),
+        base_zone: config.general.domain.clone(),
         nsname: supervisor_nsname(config),
     };
     let zones = Zones::new(db, supervisor.client(), policy, Arc::new(checker));

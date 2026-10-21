@@ -76,12 +76,14 @@ Create `lode/data/config.toml`:
 ```toml
 [general]
 listen = "0.0.0.0:53"
-domain = "s.dnsall.com"
-nsname = "s.dnsall.com"
+domain = "dnsall.com"          # the zone certo serves
+acme_domain = "s.dnsall.com"   # challenge records: <subdomain>.s.dnsall.com (defaults to domain)
+nsname = "ns1.dnsall.com"
 nsadmin = "admin.dnsall.com"
 records = [
-    "s.dnsall.com. A 1.2.3.4",
-    "s.dnsall.com. NS s.dnsall.com.",
+    "dnsall.com. A 1.2.3.4",
+    "dnsall.com. NS ns1.dnsall.com.",
+    "ns1.dnsall.com. A 1.2.3.4",
 ]
 
 [database]
@@ -290,7 +292,8 @@ code default, and env overrides.
 
 | Section | Key | Description | Default |
 |---------|-----|-------------|---------|
-| general | domain | Base domain; records live at `<subdomain>.<domain>` | required |
+| general | domain | Zone certo serves (base zone) | required |
+| general | acme_domain | Challenge domain inside it; records live at `<subdomain>.<acme_domain>` | `domain` |
 | general | nsname | Name used in SOA/NS answers | required |
 | general | listen | DNS listen address for PowerDNS, e.g. `:53` | required |
 | database | engine | `sqlite` (only supported engine) | `sqlite` |

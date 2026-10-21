@@ -14,6 +14,7 @@ describe("public", () => {
     expect(r.status).toBe(200);
     expect(r.body.provider).toBe("ns-certo");
     expect(r.body.base_domain).toBe(srv.baseDomain);
+    expect(r.body.base_zone).toBe(srv.zone);
     expect(r.body.capabilities).toContain("acmedns");
     expect(r.body.capabilities).toContain("domain_management");
     expect(r.body.capabilities).toContain("zones");

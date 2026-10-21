@@ -193,6 +193,7 @@ GET /api/info
   "provider": "ns-certo",
   "version": "v1.3.0",
   "base_domain": "s.dnsall.com",
+  "base_zone": "dnsall.com",
   "api_domain": "api.dnsall.com",
   "ns_target": "s.dnsall.com",
   "capabilities": ["multi_key","scoped_key","domain_management","wildcard_scope","account_deletion","acmedns","zones"]

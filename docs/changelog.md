@@ -135,3 +135,12 @@ The dashboard's admin area cannot live at `/admin`: `certo_api::app` routes ever
 ## 2026-10-20 07:20 [pitfall]
 
 The first `v0.1.0` release run failed: the `backend` stage of the `Dockerfile` did not copy `pdns/`, and `certo-pdns` embeds `pdns/schema.sqlite3.sql` with `include_str!`. The stage now copies `pdns/`; verified with a local `--target binary` build (static `certo` 13.7 MB + `pdns_server`). The tag was re-pointed at the fix before any release was published.
+
+## 2026-10-21 02:23 [decision]
+
+Plan 20261021-0213-base-zone-above-challenge-domain: the owner asked for `general.domain` to stay the base zone and a new `general.acme_domain` to name the challenge domain (instead of a new `general.zone` key), so `<sub>.<acme_domain>` records live inside the `domain` zone and the server's own certificate covers `domain`.
+
+## 2026-10-21 02:23 [progress]
+
+Plan 20261021-0213-base-zone-above-challenge-domain completed: `general.acme_domain` (default `domain`, validated to be inside it), `ZonePolicy.base_zone`, `check_overlap` ignores the system zone row, `GET /api/info` reports `base_zone`; e2e runs the challenge domain one label below the zone. Lockfile bumped `rustls-webpki` 0.103.16 and `webpki-root-certs` 1.0.10 for RUSTSEC-2026-0382/0383. Released as v0.1.1.
+

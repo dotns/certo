@@ -26,6 +26,10 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with("dns.example.net", "dns.example.net").await
+}
+
+async fn harness_with(base_zone: &str, base_domain: &str) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("certo.db");
     let db = Db::open(path.to_str().unwrap()).unwrap();
@@ -35,7 +39,8 @@ async fn harness() -> Harness {
         db.clone(),
         pdns.client(),
         ZonePolicy {
-            base_domain: "dns.example.net".into(),
+            base_domain: base_domain.into(),
+            base_zone: base_zone.into(),
             nsname: "ns1.dns.example.net".into(),
         },
         Arc::clone(&checker) as Arc<dyn DelegationChecker>,
@@ -180,6 +185,72 @@ async fn base_zone_is_seeded_once_and_serves_challenge_txt() {
         z.contents("_acme-challenge.dns.example.net", "TXT"),
         ["\"own-token\""]
     );
+}
+
+#[tokio::test]
+async fn base_zone_above_the_challenge_domain() {
+    let h = harness_with("corp.example.net", "dns.corp.example.net").await;
+    let seed = vec![
+        "corp.example.net. A 198.51.100.1".to_owned(),
+        "dns.corp.example.net. A 198.51.100.1".to_owned(),
+    ];
+    h.zones.ensure_base_zone(&seed).await.unwrap();
+    assert!(h.db.zone("corp.example.net").await.unwrap().is_system());
+    assert!(h.db.zone("dns.corp.example.net").await.is_err());
+    assert!(h.pdns.zone("dns.corp.example.net").is_none());
+    let z = h.pdns.zone("corp.example.net").unwrap();
+    assert_eq!(z.contents("corp.example.net", "A"), ["198.51.100.1"]);
+    assert_eq!(z.contents("dns.corp.example.net", "A"), ["198.51.100.1"]);
+    assert_eq!(
+        z.contents("corp.example.net", "NS"),
+        ["ns1.dns.example.net."]
+    );
+
+    // Challenge names stay under the challenge domain but land in the zone.
+    h.db.present_txt("abc.dns.corp.example.net", "t1")
+        .await
+        .unwrap();
+    h.zones.sync_txt("abc.dns.corp.example.net").await.unwrap();
+    h.zones.set_own_challenge(Some("own")).await.unwrap();
+    let z = h.pdns.zone("corp.example.net").unwrap();
+    assert_eq!(z.contents("abc.dns.corp.example.net", "TXT"), ["\"t1\""]);
+    assert_eq!(
+        z.contents("_acme-challenge.corp.example.net", "TXT"),
+        ["\"own\""]
+    );
+    assert_eq!(h.zones.reconcile_txt().await.unwrap(), 1);
+    assert_eq!(
+        h.pdns
+            .zone("corp.example.net")
+            .unwrap()
+            .contents("_acme-challenge.corp.example.net", "TXT"),
+        ["\"own\""]
+    );
+    assert!(matches!(
+        h.zones.sync_txt("abc.corp.example.net").await,
+        Err(ZoneOpError::Invalid {
+            code: "name_outside_zone",
+            ..
+        })
+    ));
+
+    // Users may not take the zone or anything under it, but may own an ancestor.
+    let alice = h.db.create_user("alice", "h").await.unwrap();
+    for name in [
+        "corp.example.net",
+        "dns.corp.example.net",
+        "x.dns.corp.example.net",
+    ] {
+        assert!(
+            matches!(
+                h.zones.create(Some(alice.id), name).await,
+                Err(ZoneOpError::NotAllowed(_))
+            ),
+            "{name}"
+        );
+    }
+    let apex = h.zones.create(Some(alice.id), "example.net").await.unwrap();
+    assert_eq!(apex.name, "example.net");
 }
 
 #[tokio::test]
