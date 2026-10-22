@@ -244,6 +244,11 @@ impl Zones {
         &self.policy
     }
 
+    /// The CNAME target currently published for `name`, through the configured resolver.
+    pub async fn cname(&self, name: &str) -> Result<Option<String>, String> {
+        self.checker.cname(name).await
+    }
+
     /// Whether `PowerDNS` answers its API.
     pub async fn ping(&self) -> bool {
         self.client.ping().await

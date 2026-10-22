@@ -61,6 +61,7 @@ fn api_router(state: AppState) -> Router {
             "/api/profile",
             get(web::profile).delete(web::delete_account),
         )
+        .route("/api/profile/password", put(web::change_password))
         .route("/api/keys", get(web::list_keys).post(web::create_key))
         .route("/api/keys/{id}", axum::routing::delete(web::delete_key))
         .route("/api/domains", get(web::list_domains).post(web::add_domain))
@@ -68,6 +69,7 @@ fn api_router(state: AppState) -> Router {
             "/api/domains/{domain}",
             axum::routing::delete(web::remove_domain),
         )
+        .route("/api/domains/{domain}/check", get(web::check_domain))
         .route("/api/records", get(web::list_records))
         .route(
             "/admin/users",
@@ -77,6 +79,7 @@ fn api_router(state: AppState) -> Router {
             "/admin/users/{id}",
             axum::routing::delete(admin::delete_user),
         )
+        .route("/admin/users/{id}/password", put(admin::reset_password))
         .route(
             "/admin/domains",
             get(admin::list_domains).post(admin::add_domain),

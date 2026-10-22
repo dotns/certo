@@ -1,6 +1,7 @@
 import type { Scope } from './api'
 import { PlusIcon } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { FormDialog } from '@/shared/components/form-dialog'
 import { Button } from '@/shared/components/ui/button'
 import { Field, FieldDescription, FieldLabel } from '@/shared/components/ui/field'
@@ -32,6 +33,7 @@ export function CreateZoneDialog({ scope, nsTarget, userId, onCreated }: CreateZ
       submitLabel="Add zone"
       onSubmit={async () => {
         const zone = await create.mutateAsync({ name: name.trim().toLowerCase().replace(/\.$/, ''), ...(userId ? { user_id: userId } : {}) })
+        toast.success(zone.status === 'active' ? `${zone.name} created and served` : `${zone.name} created; waiting for delegation`)
         onCreated?.(zone.name)
       }}
       onClose={() => setName('')}

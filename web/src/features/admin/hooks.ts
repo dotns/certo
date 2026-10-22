@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from '@/shared/lib/session'
-import { addDomainFor, createUser, deleteUser, listAllDomains, listAllRecords, listUsers, removeDomainEverywhere } from './api'
+import { addDomainFor, createUser, deleteUser, listAllDomains, listAllRecords, listUsers, removeDomainEverywhere, resetPassword } from './api'
 
 export const adminUsersKey = ['admin', 'users'] as const
 export const adminDomainsKey = ['admin', 'domains'] as const
@@ -55,4 +55,8 @@ export function useRemoveDomainEverywhereMutation() {
     mutationFn: removeDomainEverywhere,
     onSuccess: () => client.invalidateQueries({ queryKey: ['admin'] }),
   })
+}
+
+export function useResetPasswordMutation() {
+  return useMutation({ mutationFn: resetPassword })
 }

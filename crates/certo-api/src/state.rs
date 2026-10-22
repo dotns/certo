@@ -1,10 +1,15 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use axum::http::HeaderName;
 use certo_core::{config::Config, ids};
 use certo_db::Db;
 use certo_pdns::Zones;
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use rustc_hash::FxHashMap;
 use secrecy::{ExposeSecret, SecretString};
 
 /// bcrypt cost used for new password hashes (Go parity).
@@ -91,6 +96,8 @@ pub struct AppState {
     pub(crate) jwt: Arc<(EncodingKey, DecodingKey)>,
     /// Valid bcrypt hash compared against on unknown logins to equalize timing.
     pub(crate) dummy_hash: Arc<str>,
+    /// Last successful CNAME check per `<user id>/<domain>`, for the cooldown.
+    pub(crate) cname_checks: Arc<Mutex<FxHashMap<String, Instant>>>,
 }
 
 impl fmt::Debug for AppState {
@@ -116,6 +123,7 @@ impl AppState {
             opts: Arc::new(opts),
             jwt: Arc::new(jwt),
             dummy_hash: dummy_hash.into(),
+            cname_checks: Arc::default(),
         })
     }
 }

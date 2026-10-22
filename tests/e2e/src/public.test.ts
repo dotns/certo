@@ -19,6 +19,9 @@ describe("public", () => {
     expect(r.body.capabilities).toContain("domain_management");
     expect(r.body.capabilities).toContain("zones");
     expect(r.body.ns_target).toBe(srv.baseDomain);
+    expect(r.body.registration).toBe(true);
+    expect(r.body.capabilities).toContain("password_change");
+    expect(r.body.capabilities).toContain("cname_check");
   });
 
   test("GET /llms.txt → 200 with content", async () => {

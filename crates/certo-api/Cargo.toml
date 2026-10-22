@@ -28,6 +28,7 @@ ipnet        = { workspace = true }
 jsonwebtoken = { workspace = true }
 mime_guess   = { workspace = true }
 rust-embed   = { workspace = true }
+rustc-hash   = { workspace = true }
 rustls       = { workspace = true }
 secrecy      = { workspace = true }
 serde        = { workspace = true }

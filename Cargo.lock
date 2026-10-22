@@ -376,6 +376,7 @@ dependencies = [
  "jsonwebtoken",
  "mime_guess",
  "rust-embed",
+ "rustc-hash",
  "rustls",
  "secrecy",
  "serde",

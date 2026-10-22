@@ -7,7 +7,7 @@ import { useSession } from '@/shared/lib/session'
 export const Route = createFileRoute('/register')({
   beforeLoad: () => {
     if (useSession.getState().token)
-      throw redirect({ to: '/domains' })
+      throw redirect({ to: '/overview' })
   },
   component: RegisterPage,
 })
@@ -30,7 +30,7 @@ function RegisterPage() {
       passwordPlaceholder="At least 6 characters"
       error={register.error}
       busy={register.isPending}
-      onSubmit={credentials => register.mutate(credentials, { onSuccess: () => navigate({ to: '/domains' }) })}
+      onSubmit={credentials => register.mutate(credentials, { onSuccess: () => navigate({ to: '/overview' }) })}
       footer={(
         <>
           Already registered?

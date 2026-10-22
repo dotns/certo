@@ -144,3 +144,7 @@ Plan 20261021-0213-base-zone-above-challenge-domain: the owner asked for `genera
 
 Plan 20261021-0213-base-zone-above-challenge-domain completed: `general.acme_domain` (default `domain`, validated to be inside it), `ZonePolicy.base_zone`, `check_overlap` ignores the system zone row, `GET /api/info` reports `base_zone`; e2e runs the challenge domain one label below the zone. Lockfile bumped `rustls-webpki` 0.103.16 and `webpki-root-certs` 1.0.10 for RUSTSEC-2026-0382/0383. Released as v0.1.1.
 
+## 2026-10-22 02:02 [progress]
+
+Plan 20261021-0408-dashboard-feature-completion completed. Backend: `PUT /api/profile/password`, `PUT /admin/users/:id/password`, `GET /api/domains/:domain/check` (CNAME lookup through the configured resolver, 10 s cooldown), `GET /api/info` reports `registration` and the `password_change` / `cname_check` capabilities. Dashboard: Overview home, Account page (password change, account deletion), domain filter + CNAME check + per-domain tokens and CNAME line, key reveal dialog, Clients page with key selector and lego/Traefik/Caddy/acme.sh/cert-manager snippets, zone record filter + zone-file export/import + detail metadata and delete, admin user counts + password reset + table filters + Server tab, success toasts (sonner 2.0.8), mobile navigation menu. Verified by 76 Rust tests, 45 e2e cases, 52 Vitest tests (99% coverage) and a 15-step Playwright smoke run. Released as v0.2.0.
+

@@ -35,11 +35,13 @@ unreachable.
   "base_zone": "example.com",
   "api_domain": "api.example.com",
   "ns_target": "s.example.com",
-  "capabilities": ["multi_key","scoped_key","domain_management",
-                   "wildcard_scope","account_deletion","acmedns","zones"]
+  "capabilities": ["multi_key","scoped_key","domain_management","wildcard_scope",
+                   "account_deletion","acmedns","zones","password_change","cname_check"],
+  "registration": true
 }
 ```
-`api_domain` falls back to `base_domain` when `api.api_domain` is unset.
+`api_domain` falls back to `base_domain` when `api.api_domain` is unset. `registration`
+tells whether open registration (`POST /api/register`) is enabled.
 `ns_target` is the nameserver (`general.nsname`) a hosted zone must be delegated to
 before it is served. `base_zone` is the zone certo serves (`general.domain`); `base_domain`
 (`general.acme_domain`) is the challenge domain inside it.
@@ -62,6 +64,7 @@ Require JWT or a **global** key; a scoped key gets `403 global_key_required`.
 |---|---|---|
 | `GET` | `/api/profile` | `200 {"username"}` |
 | `DELETE` | `/api/profile` | `204` — deletes the account, its keys, domains, TXT records and hosted zones |
+| `PUT` | `/api/profile/password` | `204`. Body `{"current_password","new_password"}`. Dashboard sessions only (`403 session_required` for an API key); `401 invalid_credentials` when the current password is wrong, `400 invalid_password` when the new one is shorter than 6 characters |
 | `GET` | `/api/keys` | `200 [{"id","name","key","scope","created_at"}]` |
 | `POST` | `/api/keys` | `201` with the new key. Body `{"name","scope"?}`; `scope` defaults to `["*"]`. `400 name_required` if `name` is empty |
 | `DELETE` | `/api/keys/:id` | `204`. `400 invalid_id` for a non-numeric id |
@@ -75,6 +78,7 @@ Require JWT or any API key; scope is enforced per request.
 | `GET` | `/api/domains` | `200 [{"domain","subdomain","cname_target"}]`, filtered to the key's scope |
 | `POST` | `/api/domains` | `201 {"domain","subdomain","cname_target"}`. Body `{"domain"}`. A scoped key may only add domains within its scope (`403 domain_not_in_scope` otherwise); it does not grant itself new scope. Errors: `400 domain_required`, `403 domain_not_in_scope`, `409 domain_already_exists` |
 | `DELETE` | `/api/domains/:domain` | `204`. `403 domain_not_in_scope` for a scoped key outside its scope |
+| `GET` | `/api/domains/:domain/check` | `200 {"name","expected","observed","ok"}` — looks up `_acme-challenge.<domain>` CNAME through the server's resolver; `observed` is the target found (or `null`) and `ok` whether it equals `expected` (the `cname_target`). `404 domain_not_found`, `429 check_rate_limited` (one check per 10 s per domain), `503 check_failed` (resolver error, `message` says why) |
 | `GET` | `/api/records` | `200 [{"domain","value","last_update"}]` for the user's subdomains, filtered to the key's scope |
 
 `cname_target` is the value to point `_acme-challenge.<domain>` at.
@@ -217,6 +221,7 @@ All require `X-Admin-Key`. Disabled while `api.admin_key` is empty
 | `GET` | `/admin/users` | `200` all users |
 | `POST` | `/admin/users` | `201` — body `{"username","password"}` (password ≥ 6 chars). `409 username_taken` |
 | `DELETE` | `/admin/users/:id` | `204`; also removes the user's keys, domains and zones. `400 invalid_user_id` |
+| `PUT` | `/admin/users/:id/password` | `204` — body `{"password"}` (≥ 6 chars, else `400 invalid_password`). `404 user_not_found` |
 | `GET` | `/admin/domains` | `200` all domains with `owner` and `cname_target` |
 | `POST` | `/admin/domains` | `201` — body `{"user_id","domain"}`. `404 user_not_found`, `409 domain_already_exists` |
 | `DELETE` | `/admin/domains/:domain` | `204` — removes that domain from every user |
@@ -252,11 +257,14 @@ validation errors.
 | `invalid_id` / `invalid_user_id` | Non-numeric path id |
 | `name_required` | Key creation without a name |
 | `user_not_found` | Unknown `user_id` (admin) |
+| `session_required` | Password change attempted with an API key instead of a dashboard session |
+| `invalid_password` | New password shorter than 6 characters |
+| `domain_not_found` | CNAME check for a domain the caller has not added |
 | `zone_not_allowed` | Zone name at/under the base domain or overlapping another user's zone; base zone deletion or de-exemption |
 | `zone_already_exists` | Zone name taken |
 | `zone_not_found` / `tsig_key_not_found` | No such zone (or not yours) or TSIG key |
 | `zone_not_active` | The zone is pending delegation; rrsets cannot be changed yet |
-| `check_rate_limited` / `check_failed` | `verify` called within a minute of the last check; the delegation check could not be completed |
+| `check_rate_limited` / `check_failed` | `verify` called within a minute of the last check (or a domain CNAME check within 10 s); the check could not be completed |
 | `invalid_name` / `name_outside_zone` | Bad zone or owner name; owner not inside the zone |
 | `invalid_data` / `empty_change` / `pdns_rejected` | Record type or placement rule violated (PTR, CNAME, empty REPLACE); no changes in the body; PowerDNS refused the change (`message` has its text) |
 | `invalid_nsec_mode` / `invalid_cidr` / `invalid_algorithm` / `tsig_key_exists` | DNSSEC and transfer settings |

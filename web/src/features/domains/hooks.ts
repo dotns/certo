@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { addDomain, listDomains, listRecords, removeDomain } from './api'
+import { addDomain, checkDomain, listDomains, listRecords, removeDomain } from './api'
 
 export const domainsKey = ['domains'] as const
 export const recordsKey = ['records'] as const
@@ -29,4 +29,8 @@ export function useRemoveDomainMutation() {
       client.invalidateQueries({ queryKey: recordsKey }),
     ]),
   })
+}
+
+export function useCheckDomainMutation() {
+  return useMutation({ mutationFn: checkDomain })
 }

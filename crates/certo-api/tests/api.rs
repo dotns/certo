@@ -895,3 +895,160 @@ async fn deleting_users_and_domains_clears_challenge_txt() {
     assert_eq!(r.status, StatusCode::NO_CONTENT);
     assert_eq!(api.get("/admin/records", &admin).await.body, json!([]));
 }
+
+#[tokio::test]
+async fn passwords_can_be_changed_and_reset() {
+    let api = Api::new(options(), "127.0.0.1:1").await;
+    let bearer = session(&api, "pw").await;
+    let auth = [("authorization", bearer.as_str())];
+    // Wrong current password, too short new password.
+    let r = api
+        .json(
+            "PUT",
+            "/api/profile/password",
+            &auth,
+            json!({"current_password": "nope", "new_password": "secret2"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(r.body["error"], "invalid_credentials");
+    let r = api
+        .json(
+            "PUT",
+            "/api/profile/password",
+            &auth,
+            json!({"current_password": "secret1", "new_password": "x"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.body["error"], "invalid_password");
+    // API keys cannot change the password.
+    let key = scoped_key(&api, &bearer, &["*"]).await;
+    let r = api
+        .json(
+            "PUT",
+            "/api/profile/password",
+            &[("authorization", key.as_str())],
+            json!({"current_password": "secret1", "new_password": "secret2"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.body["error"], "session_required");
+    let r = api
+        .json(
+            "PUT",
+            "/api/profile/password",
+            &auth,
+            json!({"current_password": "secret1", "new_password": "secret2"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    let r = api
+        .json(
+            "POST",
+            "/api/login",
+            &[],
+            json!({"username": "pw", "password": "secret2"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+
+    // Admin reset.
+    let admin = [("x-admin-key", "admin")];
+    let users = api.get("/admin/users", &admin).await.body;
+    let id = users[0]["id"].as_i64().unwrap();
+    let r = api
+        .json(
+            "PUT",
+            &format!("/admin/users/{id}/password"),
+            &admin,
+            json!({"password": "x"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = api
+        .json(
+            "PUT",
+            "/admin/users/999/password",
+            &admin,
+            json!({"password": "secret3"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = api
+        .json(
+            "PUT",
+            &format!("/admin/users/{id}/password"),
+            &admin,
+            json!({"password": "secret3"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    let r = api
+        .json(
+            "POST",
+            "/api/login",
+            &[],
+            json!({"username": "pw", "password": "secret3"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn domain_cname_check_reports_the_observed_target() {
+    let api = Api::new(options(), "127.0.0.1:1").await;
+    let bearer = session(&api, "cn").await;
+    let auth = [("authorization", bearer.as_str())];
+    let r = api
+        .json(
+            "POST",
+            "/api/domains",
+            &auth,
+            json!({"domain": "www.example.com"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let target = r.body["cname_target"].as_str().unwrap().to_owned();
+
+    let info = api.get("/api/info", &[]).await.body;
+    assert_eq!(info["registration"], true);
+    assert!(
+        info["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("cname_check"))
+    );
+
+    assert_eq!(
+        api.get("/api/domains/other.example.com/check", &auth)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    api.checker.set_cname(Err("resolver down".into()));
+    let r = api.get("/api/domains/www.example.com/check", &auth).await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(r.body["error"], "check_failed");
+    // A failed check does not start the cooldown.
+    api.checker
+        .set_cname(Ok(Some("elsewhere.example.net".into())));
+    let r = api.get("/api/domains/www.example.com/check", &auth).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["name"], "_acme-challenge.www.example.com");
+    assert_eq!(r.body["expected"], target);
+    assert_eq!(r.body["observed"], "elsewhere.example.net");
+    assert_eq!(r.body["ok"], false);
+    let r = api.get("/api/domains/www.example.com/check", &auth).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(r.body["error"], "check_rate_limited");
+    // A scoped key outside the domain is refused.
+    let key = scoped_key(&api, &bearer, &["*.other.test"]).await;
+    let r = api
+        .get(
+            "/api/domains/www.example.com/check",
+            &[("authorization", key.as_str())],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+}

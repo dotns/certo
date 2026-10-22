@@ -27,6 +27,10 @@ pub enum Delegation {
 pub trait DelegationChecker: Send + Sync + fmt::Debug {
     /// Runs the check.
     async fn check(&self, zone: &str, nsname: &str) -> Result<Delegation, String>;
+
+    /// The CNAME target published for `name` (lower-case, no trailing dot), or `None`
+    /// when the name has no CNAME. `Err` means the lookup was inconclusive.
+    async fn cname(&self, name: &str) -> Result<Option<String>, String>;
 }
 
 /// Checker that walks from a recursive resolver to the parent's authoritative servers and
@@ -119,6 +123,28 @@ fn ns_names(records: &[Record]) -> Vec<String> {
 
 #[async_trait]
 impl DelegationChecker for DnsDelegationChecker {
+    async fn cname(&self, name: &str) -> Result<Option<String>, String> {
+        let name = name.trim_end_matches('.');
+        match self
+            .resolver
+            .lookup(format!("{name}."), RecordType::CNAME)
+            .await
+        {
+            Ok(lookup) => Ok(lookup
+                .answers()
+                .iter()
+                .find(|r| r.record_type() == RecordType::CNAME)
+                .map(|r| {
+                    r.data
+                        .to_string()
+                        .trim_end_matches('.')
+                        .to_ascii_lowercase()
+                })),
+            Err(e) if e.is_no_records_found() => Ok(None),
+            Err(e) => Err(format!("looking up {name} CNAME: {e}")),
+        }
+    }
+
     async fn check(&self, zone: &str, nsname: &str) -> Result<Delegation, String> {
         let parents = self.parent_nameservers(zone).await?;
         let mut addrs = Vec::new();

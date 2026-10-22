@@ -17,3 +17,12 @@ export const listDomains = () => request<Domain[]>('/api/domains')
 export const addDomain = (domain: string) => request<Domain>('/api/domains', { method: 'POST', body: { domain } })
 export const removeDomain = (domain: string) => request<void>(`/api/domains/${encodeURIComponent(domain)}`, { method: 'DELETE' })
 export const listRecords = () => request<TxtRecord[]>('/api/records')
+
+export interface CnameCheck {
+  name: string
+  expected: string
+  observed: string | null
+  ok: boolean
+}
+
+export const checkDomain = (domain: string) => request<CnameCheck>(`/api/domains/${encodeURIComponent(domain)}/check`)

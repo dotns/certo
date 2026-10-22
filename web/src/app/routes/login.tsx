@@ -7,7 +7,7 @@ import { useSession } from '@/shared/lib/session'
 export const Route = createFileRoute('/login')({
   beforeLoad: () => {
     if (useSession.getState().token)
-      throw redirect({ to: '/domains' })
+      throw redirect({ to: '/overview' })
   },
   component: LoginPage,
 })
@@ -28,7 +28,7 @@ function LoginPage() {
       busyLabel="Signing in…"
       error={login.error}
       busy={login.isPending}
-      onSubmit={credentials => login.mutate(credentials, { onSuccess: () => navigate({ to: '/domains' }) })}
+      onSubmit={credentials => login.mutate(credentials, { onSuccess: () => navigate({ to: '/overview' }) })}
       footer={(
         <>
           No account yet?

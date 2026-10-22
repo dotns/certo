@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { RrSet, Scope } from './api'
 import type { RrsetForm } from './rrsets'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { FormDialog } from '@/shared/components/form-dialog'
 import { Field, FieldDescription, FieldLabel } from '@/shared/components/ui/field'
@@ -41,6 +42,7 @@ export function RrsetDialog({ scope, zone, rrset, trigger }: RrsetDialogProps) {
         if (problems.length > 0)
           throw new Error(problems.join('. '))
         await patch.mutateAsync([changeFromForm(form)])
+        toast.success(editing ? `${rrset.type} records of ${rrset.name} saved` : 'Records added')
       }}
       onClose={() => {
         setForm(initial())

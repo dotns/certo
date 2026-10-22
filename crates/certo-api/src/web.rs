@@ -100,12 +100,61 @@ pub(crate) async fn info(State(state): State<AppState>) -> Json<serde_json::Valu
             "account_deletion",
             "acmedns",
             "zones",
+            "password_change",
+            "cname_check",
         ],
+        "registration": state.opts.allow_registration,
     }))
 }
 
 pub(crate) async fn profile(GlobalBearer(auth): GlobalBearer) -> Json<serde_json::Value> {
     Json(json!({ "username": auth.user.username }))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct PasswordChange {
+    current_password: String,
+    new_password: String,
+}
+
+/// Stores a new password hash for `user_id`; `400 invalid_password` when too short.
+pub(crate) async fn set_password(
+    state: &AppState,
+    user_id: i64,
+    password: String,
+) -> ApiResult<()> {
+    if password.len() < MIN_PASSWORD_LEN {
+        return Err(ApiError::bad_request("invalid_password"));
+    }
+    let hash = hash_password(password).await?;
+    state
+        .db
+        .set_password_hash(user_id, &hash)
+        .await
+        .map_err(|e| match e {
+            DbError::NotFound(_) => ApiError::new(StatusCode::NOT_FOUND, "user_not_found"),
+            e => ApiError::db("set password", &e),
+        })
+}
+
+/// Changes the caller's password; dashboard sessions only.
+pub(crate) async fn change_password(
+    State(state): State<AppState>,
+    auth: Bearer,
+    JsonBody(req): JsonBody<PasswordChange>,
+) -> ApiResult<StatusCode> {
+    if auth.key.is_some() {
+        return Err(ApiError::forbidden("session_required"));
+    }
+    if !verify_password(req.current_password, auth.user.password_hash.clone()).await {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_credentials",
+        ));
+    }
+    set_password(&state, auth.user.id, req.new_password).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Deletes a user with everything they own and stops serving their zones.
@@ -216,6 +265,62 @@ pub(crate) async fn remove_domain(
         sync_txt(&state, &name).await;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Minimum time between two successful CNAME checks of the same domain.
+const CNAME_CHECK_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Looks up the `_acme-challenge` CNAME of one of the caller's domains and compares it
+/// with the expected target.
+pub(crate) async fn check_domain(
+    State(state): State<AppState>,
+    auth: Bearer,
+    Path(domain): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let domain = domain.trim().to_lowercase();
+    if !auth.may_access(&domain) {
+        return Err(ApiError::forbidden("domain_not_in_scope"));
+    }
+    let subdomain = state
+        .db
+        .subdomain_by_user_domain(auth.user.id, &domain)
+        .await
+        .map_err(|e| match e {
+            DbError::NotFound(_) => ApiError::new(StatusCode::NOT_FOUND, "domain_not_found"),
+            e => ApiError::db("check domain", &e),
+        })?;
+    let key = format!("{}/{domain}", auth.user.id);
+    let recently = lock_checks(&state)
+        .get(&key)
+        .is_some_and(|t| t.elapsed() < CNAME_CHECK_COOLDOWN);
+    if recently {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "check_rate_limited",
+        ));
+    }
+    let name = format!("_acme-challenge.{domain}");
+    let observed = state.zones.cname(&name).await.map_err(|why| {
+        ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "check_failed").with_message(why)
+    })?;
+    lock_checks(&state).insert(key, std::time::Instant::now());
+    let expected = internal_domain(&subdomain, &state.opts.base_domain);
+    let ok = observed.as_deref() == Some(expected.as_str());
+    Ok(Json(json!({
+        "name": name,
+        "expected": expected,
+        "observed": observed,
+        "ok": ok,
+    })))
+}
+
+fn lock_checks(
+    state: &AppState,
+) -> std::sync::MutexGuard<'_, rustc_hash::FxHashMap<String, std::time::Instant>> {
+    state
+        .cname_checks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub(crate) async fn list_records(

@@ -413,6 +413,22 @@ impl Db {
         .await
     }
 
+    /// Replaces a user's password hash.
+    pub async fn set_password_hash(&self, user_id: i64, hash: &str) -> Result<(), DbError> {
+        let hash = hash.to_owned();
+        self.run(move |c| {
+            let n = c.execute(
+                "UPDATE users SET password_hash=?1 WHERE id=?2",
+                params![hash, user_id],
+            )?;
+            if n == 0 {
+                return Err(DbError::NotFound("user"));
+            }
+            Ok(())
+        })
+        .await
+    }
+
     /// All users ordered by id.
     pub async fn list_users(&self) -> Result<Vec<User>, DbError> {
         self.run(|c| {

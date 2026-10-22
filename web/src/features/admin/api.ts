@@ -20,3 +20,6 @@ export function removeDomainEverywhere(domain: string) {
   return request<void>(`/admin/domains/${encodeURIComponent(domain)}`, { admin: true, method: 'DELETE' })
 }
 export const listAllRecords = () => request<TxtRecord[]>('/admin/records', { admin: true })
+export function resetPassword(body: { id: number, password: string }) {
+  return request<void>(`/admin/users/${body.id}/password`, { admin: true, method: 'PUT', body: { password: body.password } })
+}

@@ -1,9 +1,10 @@
-import { createFileRoute, Link, Navigate, Outlet, redirect } from '@tanstack/react-router'
-import { LogOutIcon } from 'lucide-react'
+import { createFileRoute, Link, Navigate, Outlet, redirect, useNavigate } from '@tanstack/react-router'
+import { LogOutIcon, MenuIcon, UserIcon } from 'lucide-react'
 import { useProfileQuery, useSignOut } from '@/features/auth/hooks'
 import { useInfoQuery } from '@/features/info/hooks'
 import { ModeToggle } from '@/shared/components/mode-toggle'
 import { Button } from '@/shared/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/shared/components/ui/dropdown-menu'
 import { useSession } from '@/shared/lib/session'
 
 export const Route = createFileRoute('/_app')({
@@ -14,7 +15,8 @@ export const Route = createFileRoute('/_app')({
   component: AppLayout,
 })
 
-const NAV = [
+export const NAV = [
+  { to: '/overview', label: 'Overview' },
   { to: '/domains', label: 'Domains' },
   { to: '/zones', label: 'Zones' },
   { to: '/keys', label: 'API keys' },
@@ -25,6 +27,7 @@ const NAV = [
 function AppLayout() {
   const token = useSession(s => s.token)
   const signOut = useSignOut()
+  const navigate = useNavigate()
   const profile = useProfileQuery()
   const info = useInfoQuery()
 
@@ -34,12 +37,22 @@ function AppLayout() {
   return (
     <div className="flex min-h-svh flex-col">
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2">
-          <Link to="/domains" className="flex items-center gap-2 font-heading text-base font-semibold">
+        <div className="mx-auto flex w-full max-w-6xl items-center gap-x-4 px-4 py-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-sm" className="md:hidden" aria-label="Open navigation" />}>
+              <MenuIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              {NAV.map(item => (
+                <DropdownMenuItem key={item.to} onClick={() => navigate({ to: item.to })}>{item.label}</DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Link to="/overview" className="flex items-center gap-2 font-heading text-base font-semibold">
             <img src="/favicon.svg" alt="" className="size-6" />
             certo
           </Link>
-          <nav aria-label="Main" className="flex flex-1 items-center gap-1 overflow-x-auto">
+          <nav aria-label="Main" className="hidden flex-1 items-center gap-1 md:flex">
             {NAV.map(item => (
               <Link
                 key={item.to}
@@ -50,12 +63,26 @@ function AppLayout() {
               </Link>
             ))}
           </nav>
-          <div className="flex items-center gap-1">
-            <span className="hidden text-sm text-muted-foreground sm:inline">{profile.data?.username}</span>
+          <div className="ml-auto flex items-center gap-1">
             <ModeToggle />
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="Sign out" onClick={signOut}>
-              <LogOutIcon />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Account menu" />}>
+                <UserIcon data-icon="inline-start" />
+                <span className="hidden sm:inline">{profile.data?.username ?? 'Account'}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel>{profile.data?.username ?? 'Account'}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate({ to: '/account' })}>
+                  <UserIcon />
+                  Account
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={signOut}>
+                  <LogOutIcon />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>

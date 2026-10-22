@@ -13,8 +13,27 @@ use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
     views::{DomainView, TxtView, UserView, txt_views},
-    web::{Credentials, add_domain_for, delete_user_for, sync_txt},
+    web::{Credentials, add_domain_for, delete_user_for, set_password, sync_txt},
 };
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct PasswordReset {
+    password: String,
+}
+
+pub(crate) async fn reset_password(
+    _: Admin,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    JsonBody(req): JsonBody<PasswordReset>,
+) -> ApiResult<StatusCode> {
+    let id: i64 = id
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid_user_id"))?;
+    set_password(&state, id, req.password).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 pub(crate) async fn list_users(
     _: Admin,

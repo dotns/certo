@@ -13,9 +13,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as AppConfigRouteImport } from './routes/_app/config'
 import { Route as AppDomainsRouteImport } from './routes/_app/domains'
 import { Route as AppKeysRouteImport } from './routes/_app/keys'
+import { Route as AppOverviewRouteImport } from './routes/_app/overview'
 import { Route as AppManageIndexRouteImport } from './routes/_app/manage/index'
 import { Route as AppZonesIndexRouteImport } from './routes/_app/zones/index'
 import { Route as AppZonesZoneRouteImport } from './routes/_app/zones/$zone'
@@ -40,6 +42,11 @@ const RegisterRoute = RegisterRouteImport.update({
   path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAccountRoute = AppAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppConfigRoute = AppConfigRouteImport.update({
   id: '/config',
   path: '/config',
@@ -53,6 +60,11 @@ const AppDomainsRoute = AppDomainsRouteImport.update({
 const AppKeysRoute = AppKeysRouteImport.update({
   id: '/keys',
   path: '/keys',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOverviewRoute = AppOverviewRouteImport.update({
+  id: '/overview',
+  path: '/overview',
   getParentRoute: () => AppRoute,
 } as any)
 const AppManageIndexRoute = AppManageIndexRouteImport.update({
@@ -80,9 +92,11 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/account': typeof AppAccountRoute
   '/config': typeof AppConfigRoute
   '/domains': typeof AppDomainsRoute
   '/keys': typeof AppKeysRoute
+  '/overview': typeof AppOverviewRoute
   '/zones/$zone': typeof AppZonesZoneRoute
   '/manage/': typeof AppManageIndexRoute
   '/zones/': typeof AppZonesIndexRoute
@@ -92,9 +106,11 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/account': typeof AppAccountRoute
   '/config': typeof AppConfigRoute
   '/domains': typeof AppDomainsRoute
   '/keys': typeof AppKeysRoute
+  '/overview': typeof AppOverviewRoute
   '/zones/$zone': typeof AppZonesZoneRoute
   '/manage': typeof AppManageIndexRoute
   '/zones': typeof AppZonesIndexRoute
@@ -106,9 +122,11 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/_app/account': typeof AppAccountRoute
   '/_app/config': typeof AppConfigRoute
   '/_app/domains': typeof AppDomainsRoute
   '/_app/keys': typeof AppKeysRoute
+  '/_app/overview': typeof AppOverviewRoute
   '/_app/zones/$zone': typeof AppZonesZoneRoute
   '/_app/manage/': typeof AppManageIndexRoute
   '/_app/zones/': typeof AppZonesIndexRoute
@@ -120,9 +138,11 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/register'
+    | '/account'
     | '/config'
     | '/domains'
     | '/keys'
+    | '/overview'
     | '/zones/$zone'
     | '/manage/'
     | '/zones/'
@@ -132,9 +152,11 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/register'
+    | '/account'
     | '/config'
     | '/domains'
     | '/keys'
+    | '/overview'
     | '/zones/$zone'
     | '/manage'
     | '/zones'
@@ -145,9 +167,11 @@ export interface FileRouteTypes {
     | '/_app'
     | '/login'
     | '/register'
+    | '/_app/account'
     | '/_app/config'
     | '/_app/domains'
     | '/_app/keys'
+    | '/_app/overview'
     | '/_app/zones/$zone'
     | '/_app/manage/'
     | '/_app/zones/'
@@ -191,6 +215,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/account': {
+      id: '/_app/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AppAccountRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/config': {
       id: '/_app/config'
       path: '/config'
@@ -210,6 +241,13 @@ declare module '@tanstack/react-router' {
       path: '/keys'
       fullPath: '/keys'
       preLoaderRoute: typeof AppKeysRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/overview': {
+      id: '/_app/overview'
+      path: '/overview'
+      fullPath: '/overview'
+      preLoaderRoute: typeof AppOverviewRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/manage/': {
@@ -244,9 +282,11 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppAccountRoute: typeof AppAccountRoute
   AppConfigRoute: typeof AppConfigRoute
   AppDomainsRoute: typeof AppDomainsRoute
   AppKeysRoute: typeof AppKeysRoute
+  AppOverviewRoute: typeof AppOverviewRoute
   AppZonesZoneRoute: typeof AppZonesZoneRoute
   AppManageIndexRoute: typeof AppManageIndexRoute
   AppZonesIndexRoute: typeof AppZonesIndexRoute
@@ -254,9 +294,11 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAccountRoute: AppAccountRoute,
   AppConfigRoute: AppConfigRoute,
   AppDomainsRoute: AppDomainsRoute,
   AppKeysRoute: AppKeysRoute,
+  AppOverviewRoute: AppOverviewRoute,
   AppZonesZoneRoute: AppZonesZoneRoute,
   AppManageIndexRoute: AppManageIndexRoute,
   AppZonesIndexRoute: AppZonesIndexRoute,

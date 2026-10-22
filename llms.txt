@@ -101,6 +101,11 @@ Authorization: Bearer {jwt_or_global_key}
 DELETE /api/profile
 Authorization: Bearer {jwt_or_global_key}
 → 204 (deletes account, all keys, domains, and TXT records)
+
+PUT /api/profile/password
+Authorization: Bearer {jwt}   (dashboard session only; API keys get 403 session_required)
+{"current_password": "...", "new_password": "..."}
+→ 204
 ```
 
 ### 2. API Key Management (JWT or global key only — scoped keys cannot access)
@@ -139,6 +144,10 @@ Authorization: Bearer {jwt_or_global_key}
 {"domain": "example.com"}
 → 201 {"domain":"example.com","subdomain":"a1b2c3d4","cname_target":"a1b2c3d4.s.dnsall.com"}
 
+GET /api/domains/:domain/check
+→ 200 {"name": "_acme-challenge.example.com", "expected": "<cname_target>", "observed": "<target or null>", "ok": true}
+   (looks up the CNAME through the server's resolver; 429 check_rate_limited within 10 s, 503 check_failed)
+
 DELETE /api/domains/:domain
 Authorization: Bearer {jwt_or_global_key}
 → 204
@@ -172,6 +181,7 @@ Authorization: Basic base64(username:api_key)
 GET /admin/users → [{id, username, created_at}]
 POST /admin/users {"username", "password"} → {id, username}
 DELETE /admin/users/:id → 204
+PUT /admin/users/:id/password {"password"} → 204
 
 GET /admin/domains → [{domain, subdomain, cname_target, owner}]
 POST /admin/domains {"user_id", "domain"} → {domain, subdomain, cname_target}
@@ -196,7 +206,8 @@ GET /api/info
   "base_zone": "dnsall.com",
   "api_domain": "api.dnsall.com",
   "ns_target": "s.dnsall.com",
-  "capabilities": ["multi_key","scoped_key","domain_management","wildcard_scope","account_deletion","acmedns","zones"]
+  "capabilities": ["multi_key","scoped_key","domain_management","wildcard_scope","account_deletion","acmedns","zones","password_change","cname_check"],
+  "registration": true
 }
 ```
 
@@ -229,6 +240,8 @@ before using extended features, so they remain compatible with plain httpreq ser
    - "scoped_key" → scope field in key creation supported
    - "wildcard_scope" → *.example.com patterns supported
    - "account_deletion" → DELETE /api/profile available (for test cleanup only)
+   - "cname_check" → GET /api/domains/:domain/check available
+   - "password_change" → PUT /api/profile/password available
 ```
 
 ### Example client pseudocode:

@@ -1,7 +1,9 @@
 import type { Scope } from './api'
-import { Link } from '@tanstack/react-router'
-import { ArrowLeftIcon, RefreshCwIcon } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { ArrowLeftIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import { useEffect } from 'react'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { Loading } from '@/shared/components/loading'
 import { PageHeader } from '@/shared/components/page-header'
@@ -9,7 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/shared/components/ui/aler
 import { Button } from '@/shared/components/ui/button'
 import { formatUnix } from '@/shared/lib/format'
 import { DnssecCard } from './dnssec-card'
-import { useRrsetsQuery, useVerifyZoneMutation, useZoneQuery } from './hooks'
+import { useDeleteZoneMutation, useRrsetsQuery, useVerifyZoneMutation, useZoneQuery } from './hooks'
 import { RrsetTable } from './rrset-table'
 import { TransferCard } from './transfer-card'
 import { ZoneStatusBadge } from './zone-status'
@@ -19,6 +21,8 @@ export function ZoneDetail({ scope, zone }: { scope: Scope, zone: string }) {
   const active = query.data?.status === 'active'
   const rrsets = useRrsetsQuery(scope, zone, active)
   const verify = useVerifyZoneMutation(scope)
+  const remove = useDeleteZoneMutation(scope)
+  const navigate = useNavigate()
   const back = scope === 'admin' ? '/manage' : '/zones'
 
   useEffect(() => {
@@ -37,12 +41,44 @@ export function ZoneDetail({ scope, zone }: { scope: Scope, zone: string }) {
         )}
         description={query.data?.owner ? `Owned by ${query.data.owner}` : undefined}
         actions={query.data && !query.data.system && (
-          <Button type="button" variant="outline" disabled={verify.isPending} onClick={() => verify.mutate(zone)}>
-            <RefreshCwIcon data-icon="inline-start" />
-            Verify delegation
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={verify.isPending}
+              onClick={() => verify.mutate(zone, { onSuccess: z => toast.success(z.status === 'active' ? `${zone} is delegated and served` : `${zone} is still pending`) })}
+            >
+              <RefreshCwIcon data-icon="inline-start" />
+              Verify delegation
+            </Button>
+            <ConfirmDialog
+              trigger={(
+                <Button type="button" variant="destructive">
+                  <Trash2Icon data-icon="inline-start" />
+                  Delete zone
+                </Button>
+              )}
+              title={`Delete ${zone}?`}
+              description="All records, keys and transfer settings of the zone are removed and it stops resolving."
+              confirmLabel="Delete zone"
+              onConfirm={async () => {
+                await remove.mutateAsync(zone)
+                toast.success(`${zone} deleted`)
+                navigate({ to: back })
+              }}
+            />
+          </>
         )}
       />
+      {query.data && (
+        <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+          <Meta label="Created" value={formatUnix(query.data.created_at)} />
+          <Meta label="Verified" value={formatUnix(query.data.verified_at) || 'never'} />
+          <Meta label="Last check" value={formatUnix(query.data.last_check) || 'never'} />
+          <Meta label="Nameserver" value={query.data.ns_target} mono />
+          {query.data.exempt && !query.data.system && <Meta label="Delegation check" value="exempt" />}
+        </dl>
+      )}
       <ErrorAlert error={query.error} title="Zone could not be loaded" />
       <ErrorAlert error={verify.error} title="Verification" />
       {query.isPending && <Loading />}
@@ -94,5 +130,14 @@ export function ZoneDetail({ scope, zone }: { scope: Scope, zone: string }) {
         </>
       )}
     </>
+  )
+}
+
+function Meta({ label, value, mono }: { label: string, value: string, mono?: boolean }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={mono ? 'font-mono text-xs' : ''}>{value}</dd>
+    </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from '@/shared/lib/session'
-import { deleteAccount, getProfile, login, register } from './api'
+import { changePassword, deleteAccount, getProfile, login, register } from './api'
 
 export const profileKey = ['profile'] as const
 
@@ -44,4 +44,8 @@ export function useSignOut() {
     signOut()
     client.clear()
   }
+}
+
+export function useChangePasswordMutation() {
+  return useMutation({ mutationFn: changePassword })
 }

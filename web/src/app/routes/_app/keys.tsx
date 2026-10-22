@@ -1,8 +1,11 @@
-import { createFileRoute } from '@tanstack/react-router'
+import type { ApiKey } from '@/features/keys/api'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { useCreateKeyMutation, useDeleteKeyMutation, useKeysQuery } from '@/features/keys/hooks'
 import { isGlobalScope, normalizeScopes } from '@/features/keys/scopes'
+import { CodeBlock } from '@/shared/components/code-block'
 import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { CopyButton } from '@/shared/components/copy-button'
 import { EmptyState } from '@/shared/components/empty-state'
@@ -13,6 +16,7 @@ import { PageHeader } from '@/shared/components/page-header'
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent } from '@/shared/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/shared/components/ui/dialog'
 import { Field, FieldDescription, FieldLabel } from '@/shared/components/ui/field'
 import { Input } from '@/shared/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/shared/components/ui/table'
@@ -28,6 +32,7 @@ function KeysPage() {
   const remove = useDeleteKeyMutation()
   const [name, setName] = useState('')
   const [scopes, setScopes] = useState<string[]>([''])
+  const [created, setCreated] = useState<ApiKey | null>(null)
 
   useEffect(() => {
     document.title = 'API keys · certo'
@@ -53,7 +58,10 @@ function KeysPage() {
             )}
             title="Create API key"
             submitLabel="Create key"
-            onSubmit={() => create.mutateAsync({ name: name.trim(), scope: normalizeScopes(scopes) })}
+            onSubmit={async () => {
+              const key = await create.mutateAsync({ name: name.trim(), scope: normalizeScopes(scopes) })
+              setCreated(key)
+            }}
             onClose={reset}
           >
             <Field>
@@ -131,7 +139,10 @@ function KeysPage() {
                         title={`Delete key "${k.name}"?`}
                         description="Clients using this key stop working immediately."
                         confirmLabel="Delete"
-                        onConfirm={() => remove.mutateAsync(k.id)}
+                        onConfirm={async () => {
+                          await remove.mutateAsync(k.id)
+                          toast.success(`Key "${k.name}" deleted`)
+                        }}
                       />
                     </TableCell>
                   </TableRow>
@@ -141,6 +152,23 @@ function KeysPage() {
           </CardContent>
         </Card>
       )}
+      <Dialog open={created !== null} onOpenChange={open => !open && setCreated(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{`Key "${created?.name ?? ''}" created`}</DialogTitle>
+            <DialogDescription>Copy it into your ACME client. It stays visible on this page, so you can come back for it.</DialogDescription>
+          </DialogHeader>
+          {created && (
+            <div className="flex flex-col gap-3">
+              <CodeBlock title="API key" code={created.key} wrap />
+              <Link to="/config" search={{ key: created.id }} className="self-start">
+                <Button type="button" variant="outline" size="sm">Show client snippets with this key</Button>
+              </Link>
+            </div>
+          )}
+          <DialogFooter showCloseButton />
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

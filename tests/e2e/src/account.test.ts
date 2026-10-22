@@ -35,3 +35,13 @@ describe("account & auth", () => {
     expect((await req("POST", "/api/login", { json: { username: u.username, password: "password123" } })).status).toBe(401);
   });
 });
+
+describe("password change", () => {
+  test("PUT /api/profile/password then login with the new password", async () => {
+    const u = await newUser();
+    expect((await req("PUT", "/api/profile/password", { token: u.token, json: { current_password: "wrong", new_password: "password456" } })).status).toBe(401);
+    expect((await req("PUT", "/api/profile/password", { token: u.token, json: { current_password: "password123", new_password: "password456" } })).status).toBe(204);
+    expect((await req("POST", "/api/login", { json: { username: u.username, password: "password456" } })).status).toBe(200);
+    expect((await req("POST", "/api/login", { json: { username: u.username, password: "password123" } })).status).toBe(401);
+  });
+});

@@ -1,6 +1,7 @@
 import type { Scope, Zone } from './api'
 import { Link } from '@tanstack/react-router'
 import { RefreshCwIcon, Trash2Icon } from 'lucide-react'
+import { toast } from 'sonner'
 import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { Button } from '@/shared/components/ui/button'
 import { Switch } from '@/shared/components/ui/switch'
@@ -55,7 +56,7 @@ export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
                   <Switch
                     aria-label={`Exempt ${z.name} from the delegation check`}
                     checked={z.exempt}
-                    onCheckedChange={checked => activation.mutate({ zone: z.name, exempt: checked }, { onError })}
+                    onCheckedChange={checked => activation.mutate({ zone: z.name, exempt: checked }, { onError, onSuccess: () => toast.success(checked ? `${z.name} is served without a delegation check` : `${z.name} returns to the normal check cycle`) })}
                   />
                 )}
               </TableCell>
@@ -70,7 +71,7 @@ export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
                     size="icon-sm"
                     aria-label={`Verify delegation of ${z.name}`}
                     disabled={verify.isPending}
-                    onClick={() => verify.mutate(z.name, { onError })}
+                    onClick={() => verify.mutate(z.name, { onError, onSuccess: v => toast.success(v.status === 'active' ? `${z.name} is delegated and served` : `${z.name} is still pending`) })}
                   >
                     <RefreshCwIcon />
                   </Button>
@@ -81,7 +82,10 @@ export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
                     title={`Delete ${z.name}?`}
                     description="All records, keys and transfer settings of the zone are removed and it stops resolving."
                     confirmLabel="Delete zone"
-                    onConfirm={() => remove.mutateAsync(z.name)}
+                    onConfirm={async () => {
+                      await remove.mutateAsync(z.name)
+                      toast.success(`${z.name} deleted`)
+                    }}
                   />
                 )}
               </div>

@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { AdminDomains } from '@/features/admin/admin-domains'
 import { AdminGate } from '@/features/admin/admin-gate'
 import { AdminRecords } from '@/features/admin/admin-records'
+import { AdminServer } from '@/features/admin/admin-server'
 import { AdminUsers } from '@/features/admin/admin-users'
 import { AdminZones } from '@/features/admin/admin-zones'
 import { PageHeader } from '@/shared/components/page-header'
@@ -27,7 +28,7 @@ function AdminPage() {
     <>
       <PageHeader
         title="Administration"
-        description="Users, every hosted zone, challenge domains and published tokens."
+        description="Users, every hosted zone, challenge domains, published tokens and the server configuration."
         actions={adminKey && (
           <Button type="button" variant="outline" size="sm" onClick={() => setAdminKey(null)}>
             <LockIcon data-icon="inline-start" />
@@ -42,11 +43,13 @@ function AdminPage() {
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="domains">Domains</TabsTrigger>
             <TabsTrigger value="records">TXT records</TabsTrigger>
+            <TabsTrigger value="server">Server</TabsTrigger>
           </TabsList>
           <TabsContent value="zones"><AdminZones /></TabsContent>
           <TabsContent value="users"><AdminUsers /></TabsContent>
           <TabsContent value="domains"><AdminDomains /></TabsContent>
           <TabsContent value="records"><AdminRecords /></TabsContent>
+          <TabsContent value="server"><AdminServer /></TabsContent>
         </Tabs>
       </AdminGate>
     </>

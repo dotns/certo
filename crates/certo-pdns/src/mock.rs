@@ -22,6 +22,7 @@ use crate::{ChangeType, Client, CryptoKey, Delegation, DelegationChecker, RrSet,
 #[derive(Debug, Default)]
 pub struct ScriptedChecker {
     outcome: Mutex<Option<Result<Delegation, String>>>,
+    cname: Mutex<Option<Result<Option<String>, String>>>,
     calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -29,6 +30,11 @@ impl ScriptedChecker {
     /// Sets the outcome of the following checks.
     pub fn set(&self, outcome: Result<Delegation, String>) {
         *lock(&self.outcome) = Some(outcome);
+    }
+
+    /// Sets the outcome of the following CNAME lookups.
+    pub fn set_cname(&self, outcome: Result<Option<String>, String>) {
+        *lock(&self.cname) = Some(outcome);
     }
 
     /// Number of checks run so far.
@@ -44,6 +50,10 @@ impl DelegationChecker for ScriptedChecker {
         lock(&self.outcome)
             .clone()
             .unwrap_or_else(|| Ok(Delegation::NotDelegated("not delegated".into())))
+    }
+
+    async fn cname(&self, _name: &str) -> Result<Option<String>, String> {
+        lock(&self.cname).clone().unwrap_or(Ok(None))
     }
 }
 

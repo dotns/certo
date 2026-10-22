@@ -17,7 +17,7 @@
 - **管理接口** — `X-Admin-Key` 管理全部用户、域名、记录
 - **托管 Zone** — 每个用户可托管权威正向/反向 zone(如 `23.251.162.in-addr.arpa`):A、AAAA、CAA、CNAME、MX、NS、PTR、SRV、TXT,可选 DNSSEC(NSEC/NSEC3,提供给上级的 DS)与 AXFR 区域传送(IP 白名单或 TSIG)。zone 在上级将其委派到 certo 的 nameserver 后才会被解析(管理员可豁免)
 - **PowerDNS 数据面** — 所有 DNS 应答由内置的静态 [PowerDNS Authoritative](https://www.powerdns.com/powerdns-authoritative-server) 提供,certo 负责启动、配置并通过其 API 驱动
-- **Web 控制台** — 内嵌 React SPA,管理域名、密钥与 zone、查看 CNAME/TXT、复制客户端配置;管理员区域可管理用户与全部 zone
+- **Web 控制台** — 内嵌 React SPA:总览、挑战域名(一键检查 CNAME)、API key、现成的客户端配置(lego、Traefik、Caddy、acme.sh、cert-manager)、托管 zone(记录过滤、zone 文件导入/导出)、账号设置;管理员区域可管理用户(重置密码)、全部 zone 与服务器配置
 - **SQLite 存储** — 单个本地数据库文件
 - **SQLite 存储** — certo 自己的数据库加 PowerDNS 的数据库,都是 `data/` 下的本地文件
 - **静态发布** — `certo`(Rust,axum,仅 rustls)与 `pdns_server` 打包为一个 `linux/amd64` tarball,由 [lode](https://github.com/bkhq/lode) 运行并自动更新

@@ -6,9 +6,11 @@ import { ZoneTable } from '@/features/zones/zone-table'
 import { EmptyState } from '@/shared/components/empty-state'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { Loading } from '@/shared/components/loading'
+import { SearchInput } from '@/shared/components/search-input'
 import { Card, CardContent } from '@/shared/components/ui/card'
 import { Label } from '@/shared/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/components/ui/select'
+import { matches } from '@/shared/lib/filter'
 import { useAdminUsersQuery } from './hooks'
 
 export function AdminZones() {
@@ -17,15 +19,20 @@ export function AdminZones() {
   const info = useInfoQuery()
   const [owner, setOwner] = useState<string>('')
   const [actionError, setActionError] = useState<unknown>(null)
+  const [query, setQuery] = useState('')
+  const visible = (zones.data ?? []).filter(z => matches(query, z.name, z.owner, z.status))
 
   return (
     <div className="flex flex-col gap-4 pt-2">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <p className="text-sm text-muted-foreground">Toggle the exemption to serve a zone without a verified delegation. The base zone is always served.</p>
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">Toggle the exemption to serve a zone without a verified delegation. The base zone is always served.</p>
+          <SearchInput value={query} onChange={setQuery} placeholder="Filter zones…" />
+        </div>
         <div className="flex items-end gap-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="zone-owner">Create for user</Label>
-            <Select value={owner} onValueChange={v => setOwner(String(v ?? ''))}>
+            <Select value={owner} items={(users.data ?? []).map(u => ({ value: String(u.id), label: u.username }))} onValueChange={v => setOwner(String(v ?? ''))}>
               <SelectTrigger id="zone-owner" className="w-44">
                 <SelectValue placeholder="Choose a user" />
               </SelectTrigger>
@@ -41,10 +48,11 @@ export function AdminZones() {
       <ErrorAlert error={actionError} />
       {zones.isPending && <Loading />}
       {zones.data && zones.data.length === 0 && <EmptyState title="No zones" />}
-      {zones.data && zones.data.length > 0 && (
+      {zones.data && zones.data.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">No zone matches the filter.</p>}
+      {visible.length > 0 && (
         <Card>
           <CardContent>
-            <ZoneTable scope="admin" zones={zones.data} onError={setActionError} />
+            <ZoneTable scope="admin" zones={visible} onError={setActionError} />
           </CardContent>
         </Card>
       )}
