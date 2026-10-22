@@ -1,5 +1,6 @@
 import { PlusIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { EmptyState } from '@/shared/components/empty-state'
@@ -17,6 +18,7 @@ import { matches } from '@/shared/lib/filter'
 import { useAddDomainForMutation, useAdminDomainsQuery, useAdminUsersQuery, useRemoveDomainEverywhereMutation } from './hooks'
 
 export function AdminDomains() {
+  const { t } = useTranslation()
   const domains = useAdminDomainsQuery()
   const users = useAdminUsersQuery()
   const add = useAddDomainForMutation()
@@ -29,19 +31,19 @@ export function AdminDomains() {
   return (
     <div className="flex flex-col gap-4 pt-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SearchInput value={query} onChange={setQuery} placeholder="Filter domains…" />
+        <SearchInput value={query} onChange={setQuery} placeholder={t('admin.domains.filter')} />
         <FormDialog
           trigger={(
             <Button size="sm">
               <PlusIcon data-icon="inline-start" />
-              Add domain for user
+              {t('admin.domains.add')}
             </Button>
           )}
-          title="Add challenge domain"
-          submitLabel="Add"
+          title={t('admin.domains.dialog.title')}
+          submitLabel={t('admin.domains.dialog.submit')}
           onSubmit={async () => {
             await add.mutateAsync({ user_id: Number(userId), domain: domain.trim().toLowerCase() })
-            toast.success(`${domain.trim().toLowerCase()} added`)
+            toast.success(t('admin.domains.added', { domain: domain.trim().toLowerCase() }))
           }}
           onClose={() => {
             setUserId('')
@@ -49,10 +51,10 @@ export function AdminDomains() {
           }}
         >
           <Field>
-            <FieldLabel htmlFor="domain-user">User</FieldLabel>
+            <FieldLabel htmlFor="domain-user">{t('admin.domains.dialog.user')}</FieldLabel>
             <Select value={userId} items={(users.data ?? []).map(u => ({ value: String(u.id), label: u.username }))} onValueChange={v => setUserId(String(v ?? ''))}>
               <SelectTrigger id="domain-user" className="w-full">
-                <SelectValue placeholder="Choose a user" />
+                <SelectValue placeholder={t('admin.domains.dialog.chooseUser')} />
               </SelectTrigger>
               <SelectContent>
                 {(users.data ?? []).map(u => <SelectItem key={u.id} value={String(u.id)}>{u.username}</SelectItem>)}
@@ -60,25 +62,25 @@ export function AdminDomains() {
             </Select>
           </Field>
           <Field>
-            <FieldLabel htmlFor="domain-name">Domain</FieldLabel>
+            <FieldLabel htmlFor="domain-name">{t('admin.domains.dialog.domain')}</FieldLabel>
             <Input id="domain-name" placeholder="example.com" required value={domain} onChange={e => setDomain(e.target.value)} />
           </Field>
         </FormDialog>
       </div>
-      <ErrorAlert error={domains.error} title="Domains could not be loaded" />
+      <ErrorAlert error={domains.error} title={t('admin.domains.loadError')} />
       {domains.isPending && <Loading />}
-      {domains.data && domains.data.length === 0 && <EmptyState title="No challenge domains" />}
-      {domains.data && domains.data.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">No domain matches the filter.</p>}
+      {domains.data && domains.data.length === 0 && <EmptyState title={t('admin.domains.empty')} />}
+      {domains.data && domains.data.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">{t('admin.domains.noMatch')}</p>}
       {visible.length > 0 && (
         <Card>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Domain</TableHead>
-                  <TableHead>Owner</TableHead>
-                  <TableHead>CNAME target</TableHead>
-                  <TableHead className="w-0"><span className="sr-only">Actions</span></TableHead>
+                  <TableHead>{t('admin.domains.columns.domain')}</TableHead>
+                  <TableHead>{t('admin.domains.columns.owner')}</TableHead>
+                  <TableHead>{t('admin.domains.columns.target')}</TableHead>
+                  <TableHead className="w-0"><span className="sr-only">{t('common.actions')}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -89,13 +91,13 @@ export function AdminDomains() {
                     <TableCell className="font-mono text-xs">{d.cname_target}</TableCell>
                     <TableCell>
                       <ConfirmDialog
-                        trigger={<Button variant="ghost" size="icon-sm" aria-label={`Remove ${d.domain} for every user`}><Trash2Icon /></Button>}
-                        title={`Remove ${d.domain}?`}
-                        description="The domain is removed from every account that has it, with its tokens."
-                        confirmLabel="Remove"
+                        trigger={<Button variant="ghost" size="icon-sm" aria-label={t('admin.domains.remove.label', { domain: d.domain })}><Trash2Icon /></Button>}
+                        title={t('admin.domains.remove.title', { domain: d.domain })}
+                        description={t('admin.domains.remove.description')}
+                        confirmLabel={t('admin.domains.remove.confirm')}
                         onConfirm={async () => {
                           await remove.mutateAsync(d.domain)
-                          toast.success(`${d.domain} removed from every account`)
+                          toast.success(t('admin.domains.remove.done', { domain: d.domain }))
                         }}
                       />
                     </TableCell>

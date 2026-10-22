@@ -59,10 +59,10 @@ describe('rrset helpers', () => {
   it('validates the form', () => {
     expect(validateForm({ name: '', type: 'A', ttl: '', records: '192.0.2.1' })).toEqual([])
     expect(validateForm({ name: '', type: 'A', ttl: 'abc', records: '' })).toEqual([
-      'Enter at least one record',
-      'TTL must be a whole number of seconds',
+      'zones.rrset.enterRecord',
+      'zones.rrset.ttlNumber',
     ])
-    expect(validateForm({ name: '', type: '', ttl: '', records: 'x' })).toEqual(['Choose a record type'])
+    expect(validateForm({ name: '', type: '', ttl: '', records: 'x' })).toEqual(['zones.rrset.chooseType'])
     expect(parseRecords('a\n b \n\n')).toEqual(['a', 'b'])
     expect(parseAllowList('192.0.2.1, 2001:db8::/64\n\n10.0.0.0/8 ')).toEqual(['192.0.2.1', '2001:db8::/64', '10.0.0.0/8'])
   })

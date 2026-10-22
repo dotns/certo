@@ -68,15 +68,15 @@ export function formFromRrset(rr: RrSet, zone: string): RrsetForm {
   }
 }
 
-/** Validation errors for the rrset form; empty when the form can be submitted. */
+/** Translation keys of the rrset form's validation errors; empty when the form can be submitted. */
 export function validateForm(form: RrsetForm): string[] {
   const errors: string[] = []
   if (!form.type)
-    errors.push('Choose a record type')
+    errors.push('zones.rrset.chooseType')
   if (parseRecords(form.records).length === 0)
-    errors.push('Enter at least one record')
+    errors.push('zones.rrset.enterRecord')
   if (form.ttl.trim() && !/^\d+$/.test(form.ttl.trim()))
-    errors.push('TTL must be a whole number of seconds')
+    errors.push('zones.rrset.ttlNumber')
   return errors
 }
 

@@ -1,16 +1,24 @@
-import { describe, expect, it } from 'vitest'
+import i18next from 'i18next'
+import { afterEach, describe, expect, it } from 'vitest'
 import { abbreviate, formatIso, formatUnix } from '../format'
 
 describe('format', () => {
+  afterEach(() => i18next.changeLanguage('en'))
+
   it('formats unix seconds and leaves empty values empty', () => {
     expect(formatUnix(null)).toBe('')
     expect(formatUnix(0)).toBe('')
-    expect(formatUnix(1_700_000_000)).toBe(new Date(1_700_000_000_000).toLocaleString())
+    expect(formatUnix(1_700_000_000)).toBe(new Date(1_700_000_000_000).toLocaleString('en'))
   })
 
   it('formats RFC 3339 and passes garbage through', () => {
-    expect(formatIso('2026-10-18T07:00:00Z')).toBe(new Date('2026-10-18T07:00:00Z').toLocaleString())
+    expect(formatIso('2026-10-18T07:00:00Z')).toBe(new Date('2026-10-18T07:00:00Z').toLocaleString('en'))
     expect(formatIso('nope')).toBe('nope')
+  })
+
+  it('follows the active language', async () => {
+    await i18next.changeLanguage('zh-CN')
+    expect(formatUnix(1_700_000_000)).toBe(new Date(1_700_000_000_000).toLocaleString('zh-CN'))
   })
 
   it('abbreviates long secrets only', () => {

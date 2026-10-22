@@ -1,6 +1,7 @@
 import type { Scope } from './api'
 import { PlusIcon } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { FormDialog } from '@/shared/components/form-dialog'
 import { Button } from '@/shared/components/ui/button'
@@ -17,6 +18,7 @@ interface CreateZoneDialogProps {
 }
 
 export function CreateZoneDialog({ scope, nsTarget, userId, onCreated }: CreateZoneDialogProps) {
+  const { t } = useTranslation()
   const create = useCreateZoneMutation(scope)
   const [name, setName] = useState('')
 
@@ -25,28 +27,23 @@ export function CreateZoneDialog({ scope, nsTarget, userId, onCreated }: CreateZ
       trigger={(
         <Button>
           <PlusIcon data-icon="inline-start" />
-          Add zone
+          {t('zones.add')}
         </Button>
       )}
-      title="Add zone"
-      description="A forward zone (example.com) or a reverse zone (23.251.162.in-addr.arpa)."
-      submitLabel="Add zone"
+      title={t('zones.addDialog.title')}
+      description={t('zones.addDialog.description')}
+      submitLabel={t('zones.addDialog.submit')}
       onSubmit={async () => {
         const zone = await create.mutateAsync({ name: name.trim().toLowerCase().replace(/\.$/, ''), ...(userId ? { user_id: userId } : {}) })
-        toast.success(zone.status === 'active' ? `${zone.name} created and served` : `${zone.name} created; waiting for delegation`)
+        toast.success(zone.status === 'active' ? t('zones.created.active', { zone: zone.name }) : t('zones.created.pending', { zone: zone.name }))
         onCreated?.(zone.name)
       }}
       onClose={() => setName('')}
     >
       <Field>
-        <FieldLabel htmlFor="zone-name">Zone name</FieldLabel>
+        <FieldLabel htmlFor="zone-name">{t('zones.addDialog.label')}</FieldLabel>
         <Input id="zone-name" placeholder="example.com" required autoFocus value={name} onChange={e => setName(e.target.value)} />
-        <FieldDescription>
-          The zone is served once its parent delegates it with an NS record to
-          {' '}
-          <code>{nsTarget}</code>
-          . Checks run hourly; you can also trigger one.
-        </FieldDescription>
+        <FieldDescription>{t('zones.addDialog.hint', { ns: nsTarget })}</FieldDescription>
       </Field>
     </FormDialog>
   )

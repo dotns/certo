@@ -1,14 +1,16 @@
+import i18next from 'i18next'
+
 /** Formats a unix timestamp in seconds for display; empty for `null`. */
 export function formatUnix(seconds: number | null | undefined): string {
   if (!seconds)
     return ''
-  return new Date(seconds * 1000).toLocaleString()
+  return new Date(seconds * 1000).toLocaleString(i18next.language)
 }
 
 /** Formats an RFC 3339 timestamp for display. */
 export function formatIso(value: string): string {
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString(i18next.language)
 }
 
 /** Shortens a long secret for display, keeping both ends. */

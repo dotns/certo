@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { EmptyState } from '@/shared/components/empty-state'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { Loading } from '@/shared/components/loading'
@@ -10,25 +11,26 @@ import { formatIso } from '@/shared/lib/format'
 import { useAdminRecordsQuery } from './hooks'
 
 export function AdminRecords() {
+  const { t } = useTranslation()
   const records = useAdminRecordsQuery()
   const [query, setQuery] = useState('')
   const visible = (records.data ?? []).filter(r => matches(query, r.domain, r.value))
   return (
     <div className="flex flex-col gap-4 pt-2">
-      <SearchInput value={query} onChange={setQuery} placeholder="Filter records…" />
-      <ErrorAlert error={records.error} title="Records could not be loaded" />
+      <SearchInput value={query} onChange={setQuery} placeholder={t('admin.records.filter')} />
+      <ErrorAlert error={records.error} title={t('admin.records.loadError')} />
       {records.isPending && <Loading />}
-      {records.data && records.data.length === 0 && <EmptyState title="No tokens published" />}
-      {records.data && records.data.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">No record matches the filter.</p>}
+      {records.data && records.data.length === 0 && <EmptyState title={t('admin.records.empty')} />}
+      {records.data && records.data.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">{t('admin.records.noMatch')}</p>}
       {visible.length > 0 && (
         <Card>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Updated</TableHead>
+                  <TableHead>{t('admin.records.name')}</TableHead>
+                  <TableHead>{t('admin.records.value')}</TableHead>
+                  <TableHead>{t('admin.records.updated')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

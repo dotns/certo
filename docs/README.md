@@ -30,6 +30,8 @@ quick-start.
   so the CA follows the CNAME into certo and your primary DNS zone stays untouched.
 - **Account vs API key** — the username/password is only for the dashboard. All protocol
   traffic authenticates with an **API key**; keys carry a domain **scope**.
+- **Dashboard language** — English and Simplified Chinese; the switcher in the header
+  stores the choice in the browser, and a first visit follows the browser language.
 - **One record, two protocols** — httpreq `/present` and acme-dns `/update` write the same
   `txt` rows for the same subdomain, so either client can drive a domain.
 - **Hosted zone** — a whole zone (e.g. `example.net` or `23.251.162.in-addr.arpa`) owned by

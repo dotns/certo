@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 import { useInfoQuery } from '@/features/info/hooks'
 import { useZonesQuery } from '@/features/zones/hooks'
 import { CopyButton } from '@/shared/components/copy-button'
@@ -10,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/sha
 import { useAdminDomainsQuery, useAdminRecordsQuery, useAdminUsersQuery } from './hooks'
 
 export function AdminServer() {
+  const { t } = useTranslation()
   const info = useInfoQuery()
   const users = useAdminUsersQuery()
   const domains = useAdminDomainsQuery()
@@ -21,27 +23,27 @@ export function AdminServer() {
     <div className="grid gap-6 pt-2 lg:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle>Configuration</CardTitle>
-          <CardDescription>Values from the server config, as reported by the public info endpoint.</CardDescription>
+          <CardTitle>{t('admin.server.config.title')}</CardTitle>
+          <CardDescription>{t('admin.server.config.description')}</CardDescription>
         </CardHeader>
         <CardContent>
           <ErrorAlert error={info.error} />
           {info.isPending && <Loading />}
           {info.data && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-              <dt className="text-muted-foreground">Base zone</dt>
+              <dt className="text-muted-foreground">{t('admin.server.config.baseZone')}</dt>
               <dd className="flex flex-wrap items-center gap-2">
                 <span className="font-mono text-xs">{info.data.base_zone}</span>
-                <Link to="/manage/zones/$zone" params={{ zone: info.data.base_zone }}><Button type="button" variant="outline" size="xs">Edit records</Button></Link>
+                <Link to="/manage/zones/$zone" params={{ zone: info.data.base_zone }}><Button type="button" variant="outline" size="xs">{t('admin.server.config.editRecords')}</Button></Link>
               </dd>
-              <Entry label="Challenge domain" value={info.data.base_domain} />
-              <Entry label="Nameserver" value={info.data.ns_target} />
-              <Entry label="API host" value={info.data.api_domain} />
-              <dt className="text-muted-foreground">Registration</dt>
-              <dd>{info.data.registration ? <Badge variant="secondary">Open</Badge> : <Badge variant="outline">Closed</Badge>}</dd>
-              <dt className="text-muted-foreground">Version</dt>
+              <Entry label={t('admin.server.config.challengeDomain')} value={info.data.base_domain} />
+              <Entry label={t('admin.server.config.nameserver')} value={info.data.ns_target} />
+              <Entry label={t('admin.server.config.apiHost')} value={info.data.api_domain} />
+              <dt className="text-muted-foreground">{t('admin.server.config.registration')}</dt>
+              <dd>{info.data.registration ? <Badge variant="secondary">{t('admin.server.config.open')}</Badge> : <Badge variant="outline">{t('admin.server.config.closed')}</Badge>}</dd>
+              <dt className="text-muted-foreground">{t('admin.server.config.version')}</dt>
               <dd>{info.data.version}</dd>
-              <dt className="text-muted-foreground">Capabilities</dt>
+              <dt className="text-muted-foreground">{t('admin.server.config.capabilities')}</dt>
               <dd className="flex flex-wrap gap-1">{info.data.capabilities.map(c => <Badge key={c} variant="outline">{c}</Badge>)}</dd>
             </dl>
           )}
@@ -49,23 +51,23 @@ export function AdminServer() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>Totals</CardTitle>
-          <CardDescription>Across all accounts.</CardDescription>
+          <CardTitle>{t('admin.server.totals.title')}</CardTitle>
+          <CardDescription>{t('admin.server.totals.description')}</CardDescription>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Users</dt>
+            <dt className="text-muted-foreground">{t('admin.server.totals.users')}</dt>
             <dd className="tabular-nums">{count(users.data?.length)}</dd>
-            <dt className="text-muted-foreground">Challenge domains</dt>
+            <dt className="text-muted-foreground">{t('admin.server.totals.domains')}</dt>
             <dd className="tabular-nums">{count(domains.data?.length)}</dd>
-            <dt className="text-muted-foreground">Published tokens</dt>
+            <dt className="text-muted-foreground">{t('admin.server.totals.tokens')}</dt>
             <dd className="tabular-nums">{count(records.data?.length)}</dd>
-            <dt className="text-muted-foreground">Hosted zones</dt>
+            <dt className="text-muted-foreground">{t('admin.server.totals.zones')}</dt>
             <dd className="tabular-nums">
               {count(zones.data?.length)}
               {zones.data && (
                 <span className="text-muted-foreground">
-                  {` (${zones.data.filter(z => z.status === 'active').length} active, ${zones.data.filter(z => z.status !== 'active').length} pending)`}
+                  {` ${t('admin.server.totals.zonesDetail', { active: zones.data.filter(z => z.status === 'active').length, pending: zones.data.filter(z => z.status !== 'active').length })}`}
                 </span>
               )}
             </dd>

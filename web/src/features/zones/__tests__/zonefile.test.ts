@@ -53,12 +53,12 @@ describe('parseZoneFile', () => {
     ].join('\n'), 'example.com')
     expect(changes).toEqual([{ name: 'ok', type: 'A', changetype: 'REPLACE', records: ['192.0.2.3'] }])
     expect(skipped.map(s => [s.line, s.reason])).toEqual([
-      [1, 'the SOA is maintained by the server'],
-      [4, 'other.net. is outside example.com'],
-      [5, 'HINFO records cannot be imported'],
-      [6, '$INCLUDE is not supported'],
-      [7, 'no record type'],
-      [8, 'missing record data'],
+      [1, { key: 'soa', params: undefined }],
+      [4, { key: 'outside', params: { name: 'other.net.', zone: 'example.com' } }],
+      [5, { key: 'type', params: { type: 'HINFO' } }],
+      [6, { key: 'directive', params: { name: '$INCLUDE' } }],
+      [7, { key: 'noType', params: undefined }],
+      [8, { key: 'noData', params: undefined }],
     ])
   })
 

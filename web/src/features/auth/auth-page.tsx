@@ -1,7 +1,9 @@
 import type { FormEvent, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ErrorAlert } from '@/shared/components/error-alert'
+import { LanguageToggle } from '@/shared/components/language-toggle'
 import { ModeToggle } from '@/shared/components/mode-toggle'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card'
@@ -23,6 +25,7 @@ interface AuthPageProps {
 
 /** Shared layout for the sign-in and sign-up forms. */
 export function AuthPage({ title, description, submitLabel, busyLabel, footer, error, busy, minPassword, passwordPlaceholder, onSubmit }: AuthPageProps) {
+  const { t } = useTranslation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
@@ -36,9 +39,12 @@ export function AuthPage({ title, description, submitLabel, busyLabel, footer, e
       <div className="flex w-full max-w-sm items-center justify-between">
         <Link to="/" className="flex items-center gap-2 font-heading text-lg font-semibold">
           <img src="/favicon.svg" alt="" className="size-6" />
-          certo
+          {t('common.appName')}
         </Link>
-        <ModeToggle />
+        <div className="flex items-center gap-1">
+          <LanguageToggle />
+          <ModeToggle />
+        </div>
       </div>
       <Card className="w-full max-w-sm">
         <CardHeader>
@@ -49,11 +55,11 @@ export function AuthPage({ title, description, submitLabel, busyLabel, footer, e
           <form onSubmit={submit} className="flex flex-col gap-4">
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="username">Username</FieldLabel>
+                <FieldLabel htmlFor="username">{t('auth.username')}</FieldLabel>
                 <Input id="username" name="username" autoComplete="username" required autoFocus value={username} onChange={e => setUsername(e.target.value)} />
               </Field>
               <Field>
-                <FieldLabel htmlFor="password">Password</FieldLabel>
+                <FieldLabel htmlFor="password">{t('auth.password')}</FieldLabel>
                 <Input id="password" name="password" type="password" autoComplete={minPassword ? 'new-password' : 'current-password'} required minLength={minPassword} placeholder={passwordPlaceholder} value={password} onChange={e => setPassword(e.target.value)} />
               </Field>
             </FieldGroup>

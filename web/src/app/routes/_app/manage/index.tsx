@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { LockIcon } from 'lucide-react'
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { AdminDomains } from '@/features/admin/admin-domains'
 import { AdminGate } from '@/features/admin/admin-gate'
 import { AdminRecords } from '@/features/admin/admin-records'
@@ -17,33 +18,34 @@ export const Route = createFileRoute('/_app/manage/')({
 })
 
 function AdminPage() {
+  const { t } = useTranslation()
   const adminKey = useSession(s => s.adminKey)
   const setAdminKey = useSession(s => s.setAdminKey)
 
   useEffect(() => {
-    document.title = 'Admin · certo'
-  }, [])
+    document.title = t('titles.admin')
+  }, [t])
 
   return (
     <>
       <PageHeader
-        title="Administration"
-        description="Users, every hosted zone, challenge domains, published tokens and the server configuration."
+        title={t('admin.title')}
+        description={t('admin.description')}
         actions={adminKey && (
           <Button type="button" variant="outline" size="sm" onClick={() => setAdminKey(null)}>
             <LockIcon data-icon="inline-start" />
-            Lock
+            {t('admin.lock')}
           </Button>
         )}
       />
       <AdminGate>
         <Tabs defaultValue="zones">
           <TabsList>
-            <TabsTrigger value="zones">Zones</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="domains">Domains</TabsTrigger>
-            <TabsTrigger value="records">TXT records</TabsTrigger>
-            <TabsTrigger value="server">Server</TabsTrigger>
+            <TabsTrigger value="zones">{t('admin.tabs.zones')}</TabsTrigger>
+            <TabsTrigger value="users">{t('admin.tabs.users')}</TabsTrigger>
+            <TabsTrigger value="domains">{t('admin.tabs.domains')}</TabsTrigger>
+            <TabsTrigger value="records">{t('admin.tabs.records')}</TabsTrigger>
+            <TabsTrigger value="server">{t('admin.tabs.server')}</TabsTrigger>
           </TabsList>
           <TabsContent value="zones"><AdminZones /></TabsContent>
           <TabsContent value="users"><AdminUsers /></TabsContent>

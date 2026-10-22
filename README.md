@@ -17,7 +17,7 @@ DNS TXT record management server for ACME DNS-01 challenges — speaks both the 
 - **Admin API** — `X-Admin-Key` endpoints to manage all users, domains and records
 - **Hosted zones** — authoritative forward and reverse zones (`23.251.162.in-addr.arpa`) per user: A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT, with optional DNSSEC (NSEC/NSEC3, DS for the parent) and AXFR to secondaries (IP allow list or TSIG). A zone is served once its parent delegates it to certo's nameserver (admins can exempt)
 - **PowerDNS data plane** — all DNS answers come from a bundled, static [PowerDNS Authoritative](https://www.powerdns.com/powerdns-authoritative-server) that certo starts, configures and drives through its API
-- **Web dashboard** — embedded React SPA: overview, challenge domains with a one-click CNAME check, API keys, ready-made client snippets (lego, Traefik, Caddy, acme.sh, cert-manager), hosted zones with record filter and zone-file import/export, account settings; admin area for users (password reset), every zone and the server configuration
+- **Web dashboard** — embedded React SPA: overview, challenge domains with a one-click CNAME check, API keys, ready-made client snippets (lego, Traefik, Caddy, acme.sh, cert-manager), hosted zones with record filter and zone-file import/export, account settings; admin area for users (password reset), every zone and the server configuration; interface in English and 简体中文 (switcher in the header, browser language detected on first visit)
 - **SQLite storage** — certo's database plus PowerDNS' own, both local files under `data/`
 - **Static releases** — `certo` (Rust, axum, rustls only) and `pdns_server` in one `linux/amd64` tarball, run and auto-updated under [lode](https://github.com/bkhq/lode)
 

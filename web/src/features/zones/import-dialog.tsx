@@ -2,6 +2,7 @@ import type { Scope } from './api'
 import type { ParsedZoneFile } from './zonefile'
 import { UploadIcon } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { Button } from '@/shared/components/ui/button'
@@ -19,6 +20,7 @@ interface ImportDialogProps {
 
 /** Pastes zone-file lines, previews the resulting changes and applies them in one PATCH. */
 export function ImportDialog({ scope, zone }: ImportDialogProps) {
+  const { t } = useTranslation()
   const patch = usePatchRrsetsMutation(scope, zone)
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
@@ -38,7 +40,7 @@ export function ImportDialog({ scope, zone }: ImportDialogProps) {
       return
     patch.mutate(parsed.changes, {
       onSuccess: () => {
-        toast.success(`${parsed.changes.length} record set${parsed.changes.length === 1 ? '' : 's'} imported`)
+        toast.success(t('zones.import.done', { count: parsed.changes.length }))
         close(false)
       },
     })
@@ -48,39 +50,31 @@ export function ImportDialog({ scope, zone }: ImportDialogProps) {
     <Dialog open={open} onOpenChange={close}>
       <DialogTrigger render={<Button type="button" variant="outline" size="sm" />}>
         <UploadIcon data-icon="inline-start" />
-        Import
+        {t('zones.import.button')}
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Import records</DialogTitle>
-          <DialogDescription>Paste zone-file lines. Records of the same name and type replace the existing set; nothing else is deleted.</DialogDescription>
+          <DialogTitle>{t('zones.import.title')}</DialogTitle>
+          <DialogDescription>{t('zones.import.description')}</DialogDescription>
         </DialogHeader>
         {!parsed && (
           <Field>
-            <FieldLabel htmlFor="import-text">Zone file</FieldLabel>
+            <FieldLabel htmlFor="import-text">{t('zones.import.label')}</FieldLabel>
             <Textarea id="import-text" rows={10} className="font-mono text-xs" placeholder={`$ORIGIN ${zone}.\n@    IN A     192.0.2.1\nwww  IN CNAME ${zone}.`} value={text} onChange={e => setText(e.target.value)} />
-            <FieldDescription>
-              <code>$ORIGIN</code>
-              {' '}
-              and
-              {' '}
-              <code>$TTL</code>
-              {' '}
-              are honoured; names are relative to the zone. SOA lines are ignored.
-            </FieldDescription>
+            <FieldDescription>{t('zones.import.hint')}</FieldDescription>
           </Field>
         )}
         {parsed && (
           <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto">
-            {parsed.changes.length === 0 && <p className="text-sm text-muted-foreground">No importable records found.</p>}
+            {parsed.changes.length === 0 && <p className="text-sm text-muted-foreground">{t('zones.import.noRecords')}</p>}
             {parsed.changes.length > 0 && (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>TTL</TableHead>
-                    <TableHead>Records</TableHead>
+                    <TableHead>{t('zones.records.columns.name')}</TableHead>
+                    <TableHead>{t('zones.records.columns.type')}</TableHead>
+                    <TableHead>{t('zones.records.columns.ttl')}</TableHead>
+                    <TableHead>{t('zones.records.columns.records')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -88,7 +82,7 @@ export function ImportDialog({ scope, zone }: ImportDialogProps) {
                     <TableRow key={`${c.name}/${c.type}`}>
                       <TableCell className="font-mono text-xs">{c.name}</TableCell>
                       <TableCell className="font-medium">{c.type}</TableCell>
-                      <TableCell className="text-muted-foreground">{c.ttl ?? 'default'}</TableCell>
+                      <TableCell className="text-muted-foreground">{c.ttl ?? t('common.default')}</TableCell>
                       <TableCell>
                         <ul className="flex flex-col gap-0.5 font-mono text-xs break-all">
                           {c.records?.map(r => <li key={r}>{r}</li>)}
@@ -101,11 +95,11 @@ export function ImportDialog({ scope, zone }: ImportDialogProps) {
             )}
             {parsed.skipped.length > 0 && (
               <div className="flex flex-col gap-1 text-sm">
-                <span className="font-medium">Skipped lines</span>
+                <span className="font-medium">{t('zones.import.skipped')}</span>
                 <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
                   {parsed.skipped.map(s => (
                     <li key={s.line}>
-                      {`Line ${s.line}: ${s.reason}`}
+                      {t('zones.import.skippedLine', { line: s.line, reason: t(`zones.import.reason.${s.reason.key}`, s.reason.params) })}
                       {' '}
                       <code className="break-all">{s.text}</code>
                     </li>
@@ -115,19 +109,19 @@ export function ImportDialog({ scope, zone }: ImportDialogProps) {
             )}
           </div>
         )}
-        <ErrorAlert error={patch.error} title="Import failed" />
+        <ErrorAlert error={patch.error} title={t('zones.import.failed')} />
         <DialogFooter>
           {!parsed && (
             <>
-              <Button type="button" variant="outline" onClick={() => close(false)}>Cancel</Button>
-              <Button type="button" disabled={!text.trim()} onClick={() => setParsed(parseZoneFile(text, zone))}>Preview</Button>
+              <Button type="button" variant="outline" onClick={() => close(false)}>{t('common.cancel')}</Button>
+              <Button type="button" disabled={!text.trim()} onClick={() => setParsed(parseZoneFile(text, zone))}>{t('zones.import.preview')}</Button>
             </>
           )}
           {parsed && (
             <>
-              <Button type="button" variant="outline" disabled={patch.isPending} onClick={() => setParsed(null)}>Back</Button>
+              <Button type="button" variant="outline" disabled={patch.isPending} onClick={() => setParsed(null)}>{t('common.back')}</Button>
               <Button type="button" disabled={patch.isPending || parsed.changes.length === 0} onClick={apply}>
-                {`Import ${parsed.changes.length} set${parsed.changes.length === 1 ? '' : 's'}`}
+                {t('zones.import.submit', { count: parsed.changes.length })}
               </Button>
             </>
           )}

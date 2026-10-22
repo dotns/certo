@@ -1,6 +1,7 @@
 import type { RrSet, Scope } from './api'
 import { DownloadIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { EmptyState } from '@/shared/components/empty-state'
@@ -23,6 +24,7 @@ interface RrsetTableProps {
 }
 
 export function RrsetTable({ scope, zone, rrsets }: RrsetTableProps) {
+  const { t } = useTranslation()
   const patch = usePatchRrsetsMutation(scope, zone)
   const [query, setQuery] = useState('')
   const [type, setType] = useState<string | null>(null)
@@ -32,12 +34,12 @@ export function RrsetTable({ scope, zone, rrsets }: RrsetTableProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Records</CardTitle>
-        <CardDescription>Grouped by name and type; SOA is maintained by the server.</CardDescription>
+        <CardTitle>{t('zones.records.title')}</CardTitle>
+        <CardDescription>{t('zones.records.description')}</CardDescription>
         <CardAction className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" disabled={rrsets.length === 0} onClick={() => downloadText(`${zone}.zone`, exportZoneFile(zone, rrsets))}>
             <DownloadIcon data-icon="inline-start" />
-            Export
+            {t('zones.records.export')}
           </Button>
           <ImportDialog scope={scope} zone={zone} />
           <RrsetDialog
@@ -46,35 +48,35 @@ export function RrsetTable({ scope, zone, rrsets }: RrsetTableProps) {
             trigger={(
               <Button size="sm">
                 <PlusIcon data-icon="inline-start" />
-                Add records
+                {t('zones.records.add')}
               </Button>
             )}
           />
         </CardAction>
         {rrsets.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 pt-2">
-            <SearchInput value={query} onChange={setQuery} placeholder="Filter by name, type or content…" />
-            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Record type">
-              <Button type="button" variant={type === null ? 'secondary' : 'ghost'} size="xs" aria-pressed={type === null} onClick={() => setType(null)}>All</Button>
-              {types.map(t => (
-                <Button key={t} type="button" variant={type === t ? 'secondary' : 'ghost'} size="xs" aria-pressed={type === t} onClick={() => setType(type === t ? null : t)}>{t}</Button>
+            <SearchInput value={query} onChange={setQuery} placeholder={t('zones.records.filter')} />
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t('zones.records.typeGroup')}>
+              <Button type="button" variant={type === null ? 'secondary' : 'ghost'} size="xs" aria-pressed={type === null} onClick={() => setType(null)}>{t('zones.records.all')}</Button>
+              {types.map(rt => (
+                <Button key={rt} type="button" variant={type === rt ? 'secondary' : 'ghost'} size="xs" aria-pressed={type === rt} onClick={() => setType(type === rt ? null : rt)}>{rt}</Button>
               ))}
             </div>
           </div>
         )}
       </CardHeader>
       <CardContent>
-        {rrsets.length === 0 && <EmptyState title="No records" description="Add records one set at a time or import a zone file." />}
-        {rrsets.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">No record matches the filter.</p>}
+        {rrsets.length === 0 && <EmptyState title={t('zones.records.empty.title')} description={t('zones.records.empty.description')} />}
+        {rrsets.length > 0 && visible.length === 0 && <p className="text-sm text-muted-foreground">{t('zones.records.noMatch')}</p>}
         {visible.length > 0 && (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>TTL</TableHead>
-                <TableHead>Records</TableHead>
-                <TableHead className="w-0"><span className="sr-only">Actions</span></TableHead>
+                <TableHead>{t('zones.records.columns.name')}</TableHead>
+                <TableHead>{t('zones.records.columns.type')}</TableHead>
+                <TableHead>{t('zones.records.columns.ttl')}</TableHead>
+                <TableHead>{t('zones.records.columns.records')}</TableHead>
+                <TableHead className="w-0"><span className="sr-only">{t('common.actions')}</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -95,16 +97,16 @@ export function RrsetTable({ scope, zone, rrsets }: RrsetTableProps) {
                           scope={scope}
                           zone={zone}
                           rrset={rr}
-                          trigger={<Button variant="ghost" size="icon-sm" aria-label={`Edit ${rr.type} records of ${rr.name}`}><PencilIcon /></Button>}
+                          trigger={<Button variant="ghost" size="icon-sm" aria-label={t('zones.records.edit', { type: rr.type, name: rr.name })}><PencilIcon /></Button>}
                         />
                         <ConfirmDialog
-                          trigger={<Button variant="ghost" size="icon-sm" aria-label={`Delete ${rr.type} records of ${rr.name}`}><Trash2Icon /></Button>}
-                          title={`Delete ${rr.type} records of ${rr.name}?`}
-                          description="All records of this name and type are removed."
-                          confirmLabel="Delete"
+                          trigger={<Button variant="ghost" size="icon-sm" aria-label={t('zones.records.deleteLabel', { type: rr.type, name: rr.name })}><Trash2Icon /></Button>}
+                          title={t('zones.records.deleteTitle', { type: rr.type, name: rr.name })}
+                          description={t('zones.records.deleteDescription')}
+                          confirmLabel={t('zones.records.deleteConfirm')}
                           onConfirm={async () => {
                             await patch.mutateAsync([deleteChange(rr)])
-                            toast.success(`${rr.type} records of ${relativeName(rr.name, zone)} deleted`)
+                            toast.success(t('zones.records.deleted', { type: rr.type, name: relativeName(rr.name, zone) }))
                           }}
                         />
                       </div>

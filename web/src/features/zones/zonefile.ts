@@ -1,10 +1,16 @@
 import type { RrSet, RrSetChange } from './api'
 import { DEFAULT_TTL, isManagedType, relativeName } from './rrsets'
 
+/** Why a line was skipped: a `zones.import.reason.*` key and its interpolation values. */
+export interface SkipReason {
+  key: string
+  params?: Record<string, string>
+}
+
 export interface SkippedLine {
   line: number
   text: string
-  reason: string
+  reason: SkipReason
 }
 
 export interface ParsedZoneFile {
@@ -105,7 +111,7 @@ export function parseZoneFile(text: string, zone: string): ParsedZoneFile {
     const tokens = tokenize(raw)
     if (tokens.length === 0)
       continue
-    const skip = (reason: string) => skipped.push({ line, text: raw.trim(), reason })
+    const skip = (key: string, params?: Record<string, string>) => skipped.push({ line, text: raw.trim(), reason: { key, params } })
     const first = tokens[0] ?? ''
     if (first.toUpperCase() === '$ORIGIN') {
       origin = (tokens[1] ?? '').toLowerCase().replace(/\.$/, '')
@@ -116,7 +122,7 @@ export function parseZoneFile(text: string, zone: string): ParsedZoneFile {
       continue
     }
     if (first.startsWith('$')) {
-      skip(`${first} is not supported`)
+      skip('directive', { name: first })
       continue
     }
     let rest = tokens
@@ -128,7 +134,7 @@ export function parseZoneFile(text: string, zone: string): ParsedZoneFile {
       owner = ownerName(first, origin, zone)
       rest = tokens.slice(1)
       if (owner === null) {
-        skip(`${first} is outside ${zone}`)
+        skip('outside', { name: first, zone })
         continue
       }
       lastOwner = owner
@@ -147,19 +153,19 @@ export function parseZoneFile(text: string, zone: string): ParsedZoneFile {
     const type = (rest[0] ?? '').toUpperCase()
     const rdata = rest.slice(1).join(' ')
     if (!type) {
-      skip('no record type')
+      skip('noType')
       continue
     }
     if (type === 'SOA') {
-      skip('the SOA is maintained by the server')
+      skip('soa')
       continue
     }
     if (!isManagedType(type)) {
-      skip(`${type} records cannot be imported`)
+      skip('type', { type })
       continue
     }
     if (!rdata) {
-      skip('missing record data')
+      skip('noData')
       continue
     }
     const key = `${owner}/${type}`

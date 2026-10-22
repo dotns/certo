@@ -2,6 +2,7 @@ export type Protocol = 'httpreq' | 'acmedns'
 export type ClientId = 'lego' | 'traefik' | 'caddy' | 'acmesh' | 'certmanager'
 
 export interface Snippet {
+  /** Translation key of the heading (`clients.snippet.*`). */
   title: string
   code: string
 }
@@ -9,6 +10,7 @@ export interface Snippet {
 export interface ClientSnippets {
   id: ClientId
   title: string
+  /** Translation key of the note (`clients.note.*`), interpolated with `client`. */
   note: string | null
   snippets: Snippet[]
 }
@@ -45,35 +47,35 @@ export function clientSnippets(protocol: Protocol, apiDomain: string, username: 
         title: 'lego',
         note: null,
         snippets: [
-          { title: 'Environment variables', code: env },
-          { title: 'Run', code: `lego --dns httpreq --dns.propagation-disable-ans \\\n${LEGO_RUN}` },
+          { title: 'clients.snippet.env', code: env },
+          { title: 'clients.snippet.run', code: `lego --dns httpreq --dns.propagation-disable-ans \\\n${LEGO_RUN}` },
         ],
       },
       {
         id: 'traefik',
         title: 'Traefik',
-        note: 'Traefik embeds lego; the resolver uses the httpreq provider with the same variables.',
+        note: 'clients.note.httpreqTraefik',
         snippets: [
-          { title: 'traefik.yml', code: `${TRAEFIK_BASE}\n        provider: httpreq\n        propagation:\n          disableChecks: true` },
-          { title: 'docker-compose environment', code: `LEGO_DISABLE_CNAME_SUPPORT: "true"\nHTTPREQ_ENDPOINT: "${base}"\nHTTPREQ_USERNAME: "${username}"\nHTTPREQ_PASSWORD: "${key}"` },
+          { title: 'clients.snippet.traefikYml', code: `${TRAEFIK_BASE}\n        provider: httpreq\n        propagation:\n          disableChecks: true` },
+          { title: 'clients.snippet.compose', code: `LEGO_DISABLE_CNAME_SUPPORT: "true"\nHTTPREQ_ENDPOINT: "${base}"\nHTTPREQ_USERNAME: "${username}"\nHTTPREQ_PASSWORD: "${key}"` },
         ],
       },
       {
         id: 'caddy',
         title: 'Caddy',
-        note: 'Caddy has no httpreq module; use the acme-dns protocol instead.',
+        note: 'clients.note.httpreqUnsupported',
         snippets: [],
       },
       {
         id: 'acmesh',
         title: 'acme.sh',
-        note: 'acme.sh has no httpreq provider; use the acme-dns protocol instead.',
+        note: 'clients.note.httpreqUnsupported',
         snippets: [],
       },
       {
         id: 'certmanager',
         title: 'cert-manager',
-        note: 'cert-manager has no httpreq solver; use the acme-dns protocol instead.',
+        note: 'clients.note.httpreqUnsupported',
         snippets: [],
       },
     ]
@@ -92,10 +94,10 @@ export function clientSnippets(protocol: Protocol, apiDomain: string, username: 
     {
       id: 'lego',
       title: 'lego',
-      note: 'The storage URL carries your username and API key, so accounts are fetched and domains created automatically; there is no local JSON to pre-seed.',
+      note: 'clients.note.acmednsLego',
       snippets: [
-        { title: 'Environment variables', code: `ACME_DNS_API_BASE=${base}\nACME_DNS_STORAGE_BASE_URL=${storage}` },
-        { title: 'Run', code: `lego --dns acme-dns \\\n${LEGO_RUN}` },
+        { title: 'clients.snippet.env', code: `ACME_DNS_API_BASE=${base}\nACME_DNS_STORAGE_BASE_URL=${storage}` },
+        { title: 'clients.snippet.run', code: `lego --dns acme-dns \\\n${LEGO_RUN}` },
       ],
     },
     {
@@ -103,40 +105,40 @@ export function clientSnippets(protocol: Protocol, apiDomain: string, username: 
       title: 'Traefik',
       note: null,
       snippets: [
-        { title: 'traefik.yml', code: `${TRAEFIK_BASE}\n        provider: acme-dns` },
-        { title: 'docker-compose environment', code: `ACME_DNS_API_BASE: "${base}"\nACME_DNS_STORAGE_BASE_URL: "${storage}"` },
+        { title: 'clients.snippet.traefikYml', code: `${TRAEFIK_BASE}\n        provider: acme-dns` },
+        { title: 'clients.snippet.compose', code: `ACME_DNS_API_BASE: "${base}"\nACME_DNS_STORAGE_BASE_URL: "${storage}"` },
       ],
     },
     {
       id: 'caddy',
       title: 'Caddy',
-      note: 'Build Caddy with the acmedns module (xcaddy build --with github.com/caddy-dns/acmedns) and reference the account file.',
+      note: 'clients.note.acmednsCaddy',
       snippets: [
-        { title: 'Caddyfile', code: `example.com {
+        { title: 'clients.snippet.caddyfile', code: `example.com {
   tls {
     dns acmedns {
       config /etc/caddy/acmedns.json
     }
   }
 }` },
-        { title: '/etc/caddy/acmedns.json', code: account },
+        { title: 'clients.snippet.caddyJson', code: account },
       ],
     },
     {
       id: 'acmesh',
       title: 'acme.sh',
-      note: 'Set the account details once; acme.sh stores them in its config for renewals.',
+      note: 'clients.note.acmednsAcmesh',
       snippets: [
-        { title: 'Environment variables', code: `export ACMEDNS_BASE_URL="${base}"\nexport ACMEDNS_USERNAME="${username}"\nexport ACMEDNS_PASSWORD="${key}"\nexport ACMEDNS_SUBDOMAIN="<subdomain from the Domains page>"` },
-        { title: 'Issue', code: `acme.sh --issue --dns dns_acmedns -d example.com -d "*.example.com"` },
+        { title: 'clients.snippet.env', code: `export ACMEDNS_BASE_URL="${base}"\nexport ACMEDNS_USERNAME="${username}"\nexport ACMEDNS_PASSWORD="${key}"\nexport ACMEDNS_SUBDOMAIN="<subdomain from the Domains page>"` },
+        { title: 'clients.snippet.issue', code: `acme.sh --issue --dns dns_acmedns -d example.com -d "*.example.com"` },
       ],
     },
     {
       id: 'certmanager',
       title: 'cert-manager',
-      note: 'The Secret holds the acme-dns account JSON; one entry per domain.',
+      note: 'clients.note.acmednsCertmanager',
       snippets: [
-        { title: 'Secret', code: `apiVersion: v1
+        { title: 'clients.snippet.secret', code: `apiVersion: v1
 kind: Secret
 metadata:
   name: acme-dns
@@ -144,7 +146,7 @@ type: Opaque
 stringData:
   acmedns.json: |
 ${account.split('\n').map(l => `    ${l}`).join('\n')}` },
-        { title: 'Issuer', code: `apiVersion: cert-manager.io/v1
+        { title: 'clients.snippet.issuer', code: `apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   name: letsencrypt

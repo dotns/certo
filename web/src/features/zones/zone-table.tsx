@@ -1,6 +1,7 @@
 import type { Scope, Zone } from './api'
 import { Link } from '@tanstack/react-router'
 import { RefreshCwIcon, Trash2Icon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { Button } from '@/shared/components/ui/button'
@@ -18,6 +19,7 @@ interface ZoneTableProps {
 
 /** Zone list shared by the user and admin views. */
 export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
+  const { t } = useTranslation()
   const verify = useVerifyZoneMutation(scope)
   const remove = useDeleteZoneMutation(scope)
   const activation = useActivationMutation()
@@ -27,12 +29,12 @@ export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Zone</TableHead>
-          {admin && <TableHead>Owner</TableHead>}
-          <TableHead>Status</TableHead>
-          {admin && <TableHead>Exempt</TableHead>}
-          <TableHead>Last check</TableHead>
-          <TableHead className="w-0"><span className="sr-only">Actions</span></TableHead>
+          <TableHead>{t('zones.columns.zone')}</TableHead>
+          {admin && <TableHead>{t('zones.columns.owner')}</TableHead>}
+          <TableHead>{t('zones.columns.status')}</TableHead>
+          {admin && <TableHead>{t('zones.columns.exempt')}</TableHead>}
+          <TableHead>{t('zones.columns.lastCheck')}</TableHead>
+          <TableHead className="w-0"><span className="sr-only">{t('common.actions')}</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -54,14 +56,14 @@ export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
               <TableCell>
                 {!z.system && (
                   <Switch
-                    aria-label={`Exempt ${z.name} from the delegation check`}
+                    aria-label={t('zones.exemptLabel', { zone: z.name })}
                     checked={z.exempt}
-                    onCheckedChange={checked => activation.mutate({ zone: z.name, exempt: checked }, { onError, onSuccess: () => toast.success(checked ? `${z.name} is served without a delegation check` : `${z.name} returns to the normal check cycle`) })}
+                    onCheckedChange={checked => activation.mutate({ zone: z.name, exempt: checked }, { onError, onSuccess: () => toast.success(checked ? t('zones.exempted', { zone: z.name }) : t('zones.unexempted', { zone: z.name })) })}
                   />
                 )}
               </TableCell>
             )}
-            <TableCell className="text-muted-foreground">{formatUnix(z.last_check) || 'never'}</TableCell>
+            <TableCell className="text-muted-foreground">{formatUnix(z.last_check) || t('common.never')}</TableCell>
             <TableCell>
               <div className="flex items-center justify-end gap-1">
                 {!z.system && (
@@ -69,22 +71,22 @@ export function ZoneTable({ scope, zones, onError }: ZoneTableProps) {
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={`Verify delegation of ${z.name}`}
+                    aria-label={t('zones.verifyLabel', { zone: z.name })}
                     disabled={verify.isPending}
-                    onClick={() => verify.mutate(z.name, { onError, onSuccess: v => toast.success(v.status === 'active' ? `${z.name} is delegated and served` : `${z.name} is still pending`) })}
+                    onClick={() => verify.mutate(z.name, { onError, onSuccess: v => toast.success(v.status === 'active' ? t('zones.verified.active', { zone: z.name }) : t('zones.verified.pending', { zone: z.name })) })}
                   >
                     <RefreshCwIcon />
                   </Button>
                 )}
                 {!z.system && (
                   <ConfirmDialog
-                    trigger={<Button variant="ghost" size="icon-sm" aria-label={`Delete zone ${z.name}`}><Trash2Icon /></Button>}
-                    title={`Delete ${z.name}?`}
-                    description="All records, keys and transfer settings of the zone are removed and it stops resolving."
-                    confirmLabel="Delete zone"
+                    trigger={<Button variant="ghost" size="icon-sm" aria-label={t('zones.delete.label', { zone: z.name })}><Trash2Icon /></Button>}
+                    title={t('zones.delete.title', { zone: z.name })}
+                    description={t('zones.delete.description')}
+                    confirmLabel={t('zones.delete.confirm')}
                     onConfirm={async () => {
                       await remove.mutateAsync(z.name)
-                      toast.success(`${z.name} deleted`)
+                      toast.success(t('zones.delete.done', { zone: z.name }))
                     }}
                   />
                 )}

@@ -1,0 +1,624 @@
+{
+  "common": {
+    "appName": "certo",
+    "loading": "Loading",
+    "cancel": "Cancel",
+    "close": "Close",
+    "back": "Back",
+    "copy": "Copy",
+    "copied": "Copied",
+    "actions": "Actions",
+    "never": "never",
+    "default": "default",
+    "pageNotFound": "Page not found.",
+    "github": "GitHub",
+    "llms": "llms.txt",
+    "version": "certo {{version}}",
+    "confirm": "Confirm",
+    "save": "Save",
+    "filter": "Filter",
+    "filterPlaceholder": "Filter…"
+  },
+  "nav": {
+    "overview": "Overview",
+    "domains": "Domains",
+    "zones": "Zones",
+    "keys": "API keys",
+    "clients": "Clients",
+    "admin": "Admin",
+    "account": "Account",
+    "signOut": "Sign out",
+    "openNavigation": "Open navigation",
+    "accountMenu": "Account menu",
+    "theme": "Theme: {{theme}}. Switch theme",
+    "language": "Language",
+    "main": "Main"
+  },
+  "titles": {
+    "signIn": "Sign in · certo",
+    "register": "Create account · certo",
+    "overview": "Overview · certo",
+    "account": "Account · certo",
+    "domains": "Domains · certo",
+    "keys": "API keys · certo",
+    "clients": "Clients · certo",
+    "zones": "Zones · certo",
+    "zone": "{{zone}} · certo",
+    "admin": "Admin · certo"
+  },
+  "auth": {
+    "username": "Username",
+    "password": "Password",
+    "signIn": {
+      "title": "Sign in",
+      "description": "Manage challenge domains, API keys and hosted zones.",
+      "submit": "Sign in",
+      "busy": "Signing in…",
+      "noAccount": "No account yet?",
+      "create": "Create one"
+    },
+    "register": {
+      "title": "Create account",
+      "description": "Your account comes with a global API key for ACME clients.",
+      "submit": "Create account",
+      "busy": "Creating…",
+      "passwordPlaceholder": "At least 6 characters",
+      "already": "Already registered?",
+      "signIn": "Sign in"
+    }
+  },
+  "overview": {
+    "title": "Overview",
+    "hello": "Hello, {{name}}",
+    "description": "Your challenge domains, hosted zones and keys at a glance.",
+    "stats": {
+      "domains": "Challenge domains",
+      "tokens": "Published tokens",
+      "tokensHint": "TXT records live right now",
+      "zones": "Hosted zones",
+      "zonesHint": "{{active}} active · {{pending}} pending",
+      "keys": "API keys"
+    },
+    "server": {
+      "title": "Server",
+      "description": "What this certo instance serves.",
+      "baseZone": "Base zone",
+      "challengeDomain": "Challenge domain",
+      "challengeHint": "challenge records live at <subdomain>.this",
+      "nameserver": "Nameserver",
+      "nameserverHint": "delegate hosted zones here",
+      "apiHost": "API host",
+      "version": "Version",
+      "registration": "Registration",
+      "open": "Open",
+      "closed": "Closed"
+    },
+    "quickStart": {
+      "title": "Quick start",
+      "description": "Three steps to DNS-01 certificates without exposing your zone.",
+      "step1": {
+        "title": "Add a challenge domain",
+        "text": "Register the domain you request certificates for; certo assigns it a unique CNAME target.",
+        "label": "Domains"
+      },
+      "step2": {
+        "title": "Point the CNAME at it",
+        "text": "At your DNS provider, create _acme-challenge.<domain> CNAME <target>. The Domains page checks it for you.",
+        "label": "Check CNAME"
+      },
+      "step3": {
+        "title": "Configure your ACME client",
+        "text": "Use an API key with lego, Traefik, Caddy, acme.sh or cert-manager; the Clients page has ready-made snippets.",
+        "label": "Clients"
+      }
+    }
+  },
+  "account": {
+    "title": "Account",
+    "signedInAs": "Signed in as {{name}}.",
+    "password": {
+      "title": "Change password",
+      "description": "Existing sessions and API keys keep working.",
+      "current": "Current password",
+      "new": "New password",
+      "newHint": "At least 6 characters.",
+      "repeat": "Repeat new password",
+      "mismatch": "The passwords do not match.",
+      "submit": "Change password",
+      "changed": "Password changed"
+    },
+    "delete": {
+      "title": "Delete account",
+      "description": "Removes your API keys, challenge domains, published tokens and hosted zones. Certificates already issued stay valid, but renewals through this account stop.",
+      "confirmLabel": "Type your username to confirm",
+      "button": "Delete my account",
+      "dialogTitle": "Delete this account?",
+      "dialogDescription": "This cannot be undone. Hosted zones stop resolving immediately.",
+      "dialogConfirm": "Delete account"
+    }
+  },
+  "domains": {
+    "title": "Challenge domains",
+    "description": "Each domain gets a CNAME target; ACME clients write their DNS-01 tokens there.",
+    "add": "Add domain",
+    "addDialog": {
+      "title": "Add domain",
+      "description": "The domain you request certificates for. A CNAME from its _acme-challenge name to the target shown afterwards completes the setup.",
+      "submit": "Add domain",
+      "label": "Domain",
+      "hint": "Wildcards and subdomains of this name use the same CNAME."
+    },
+    "loadError": "Domains could not be loaded",
+    "empty": {
+      "title": "No domains yet",
+      "description": "Add a domain to get its CNAME target, or let a global API key create it on first use."
+    },
+    "card": {
+      "title": "Domains",
+      "description": "Expand a row to see its published tokens; check the CNAME after setting it up."
+    },
+    "filter": "Filter domains…",
+    "noMatch": "No domain matches the filter.",
+    "columns": {
+      "domain": "Domain",
+      "target": "CNAME target",
+      "status": "Status",
+      "expand": "Expand"
+    },
+    "expand": "Expand {{domain}}",
+    "collapse": "Collapse {{domain}}",
+    "tokens_one": "{{count}} token",
+    "tokens_other": "{{count}} tokens",
+    "check": "Check CNAME",
+    "couldNotCheck": "Could not check",
+    "inPlace": "CNAME in place",
+    "pointsAt": "Points at {{target}}",
+    "noCname": "No CNAME found",
+    "remove": {
+      "label": "Remove {{domain}}",
+      "title": "Remove {{domain}}?",
+      "description": "Its challenge records are deleted and clients using the CNAME stop working.",
+      "confirm": "Remove",
+      "done": "{{domain}} removed"
+    },
+    "dnsRecord": "DNS record to add at your provider",
+    "publishedTokens": "Published tokens",
+    "noTokens": "None right now; they appear while a client validates a challenge.",
+    "records": {
+      "title": "Active TXT records",
+      "description": "Tokens currently published for your domains; they refresh every 15 seconds.",
+      "loadError": "Records could not be loaded",
+      "none": "No tokens published right now.",
+      "name": "Name",
+      "value": "Value",
+      "updated": "Updated"
+    },
+    "created": {
+      "title": "{{domain}} added",
+      "description": "Create this record at your DNS provider, then use \"Check CNAME\" on the domain row.",
+      "record": "DNS record"
+    }
+  },
+  "keys": {
+    "title": "API keys",
+    "description": "Keys authenticate ACME clients (httpreq and acme-dns). A scoped key only reaches the domains it lists.",
+    "create": "Create key",
+    "dialog": {
+      "title": "Create API key",
+      "submit": "Create key",
+      "name": "Name",
+      "domains": "Domains",
+      "domain": "Domain {{n}}",
+      "removeDomain": "Remove domain {{n}}",
+      "addDomain": "Add domain",
+      "hint": "*.example.com covers the domain and its subdomains, example.com the exact name. Leave empty for a global key."
+    },
+    "loadError": "Keys could not be loaded",
+    "empty": {
+      "title": "No API keys",
+      "description": "Create a key to configure an ACME client."
+    },
+    "columns": {
+      "name": "Name",
+      "key": "Key",
+      "scope": "Scope",
+      "created": "Created"
+    },
+    "global": "Global",
+    "delete": {
+      "label": "Delete key {{name}}",
+      "title": "Delete key \"{{name}}\"?",
+      "description": "Clients using this key stop working immediately.",
+      "confirm": "Delete",
+      "done": "Key \"{{name}}\" deleted"
+    },
+    "created": {
+      "title": "Key \"{{name}}\" created",
+      "description": "Copy it into your ACME client. It stays visible on this page, so you can come back for it.",
+      "key": "API key",
+      "snippets": "Show client snippets with this key"
+    }
+  },
+  "clients": {
+    "title": "Client setup",
+    "description": "Point your ACME client at this server with one of your API keys.",
+    "keyLabel": "API key",
+    "keyPlaceholder": "Placeholder only",
+    "protocol": "Protocol",
+    "client": "Client",
+    "selectKeyHint": "Select an API key above to fill in {{placeholder}}.",
+    "protocolNote": {
+      "httpreq": "lego's HTTP request provider: the client posts each challenge to this server with your username and API key.",
+      "acmedns": "The acme-dns protocol, understood by many clients. Your username and API key are the acme-dns credentials; the CNAME is the same as for httpreq."
+    },
+    "snippet": {
+      "env": "Environment variables",
+      "run": "Run",
+      "traefikYml": "traefik.yml",
+      "compose": "docker-compose environment",
+      "caddyfile": "Caddyfile",
+      "caddyJson": "/etc/caddy/acmedns.json",
+      "issue": "Issue",
+      "secret": "Secret",
+      "issuer": "Issuer"
+    },
+    "note": {
+      "httpreqTraefik": "Traefik embeds lego; the resolver uses the httpreq provider with the same variables.",
+      "httpreqUnsupported": "{{client}} has no httpreq integration; use the acme-dns protocol instead.",
+      "acmednsLego": "The storage URL carries your username and API key, so accounts are fetched and domains created automatically; there is no local JSON to pre-seed.",
+      "acmednsCaddy": "Build Caddy with the acmedns module (xcaddy build --with github.com/caddy-dns/acmedns) and reference the account file.",
+      "acmednsAcmesh": "Set the account details once; acme.sh stores them in its config for renewals.",
+      "acmednsCertmanager": "The Secret holds the acme-dns account JSON; one entry per domain."
+    }
+  },
+  "zones": {
+    "title": "Hosted zones",
+    "description": "Authoritative forward and reverse zones. Delegate a zone to {{ns}} and it is served after the next check.",
+    "thisServer": "this server",
+    "loadError": "Zones could not be loaded",
+    "empty": {
+      "title": "No zones yet",
+      "description": "Add a zone to host its records here."
+    },
+    "add": "Add zone",
+    "addDialog": {
+      "title": "Add zone",
+      "description": "A forward zone (example.com) or a reverse zone (23.251.162.in-addr.arpa).",
+      "submit": "Add zone",
+      "label": "Zone name",
+      "hint": "The zone is served once its parent delegates it with an NS record to {{ns}}. Checks run hourly; you can also trigger one."
+    },
+    "created": {
+      "active": "{{zone}} created and served",
+      "pending": "{{zone}} created; waiting for delegation"
+    },
+    "columns": {
+      "zone": "Zone",
+      "owner": "Owner",
+      "status": "Status",
+      "exempt": "Exempt",
+      "lastCheck": "Last check"
+    },
+    "exemptLabel": "Exempt {{zone}} from the delegation check",
+    "exempted": "{{zone}} is served without a delegation check",
+    "unexempted": "{{zone}} returns to the normal check cycle",
+    "verifyLabel": "Verify delegation of {{zone}}",
+    "verified": {
+      "active": "{{zone}} is delegated and served",
+      "pending": "{{zone}} is still pending"
+    },
+    "delete": {
+      "label": "Delete zone {{zone}}",
+      "title": "Delete {{zone}}?",
+      "description": "All records, keys and transfer settings of the zone are removed and it stops resolving.",
+      "confirm": "Delete zone",
+      "done": "{{zone}} deleted"
+    },
+    "status": {
+      "pending": "Pending",
+      "active": "Active",
+      "exempt": "Active · exempt",
+      "base": "Base zone"
+    },
+    "detail": {
+      "back": "Back to zones",
+      "ownedBy": "Owned by {{owner}}",
+      "verify": "Verify delegation",
+      "deleteZone": "Delete zone",
+      "loadError": "Zone could not be loaded",
+      "verifyTitle": "Verification",
+      "waitingTitle": "Waiting for delegation",
+      "waitingText": "At the parent (registrar or address block owner), add an NS record for {{zone}} pointing at {{ns}}. The zone is checked hourly and served once the delegation is found.",
+      "lastCheck": "Last check {{time}}",
+      "failingTitle": "Delegation check failing",
+      "failingText": "{{count}} consecutive failed checks; the zone stops being served after 7.",
+      "lastError": "Last error: {{error}}",
+      "recordsError": "Records could not be loaded",
+      "meta": {
+        "created": "Created",
+        "verified": "Verified",
+        "lastCheck": "Last check",
+        "nameserver": "Nameserver",
+        "check": "Delegation check",
+        "exempt": "exempt"
+      },
+      "lastCheckError": "Last check {{time}}: {{error}}"
+    },
+    "records": {
+      "title": "Records",
+      "description": "Grouped by name and type; SOA is maintained by the server.",
+      "export": "Export",
+      "add": "Add records",
+      "filter": "Filter by name, type or content…",
+      "typeGroup": "Record type",
+      "all": "All",
+      "empty": {
+        "title": "No records",
+        "description": "Add records one set at a time or import a zone file."
+      },
+      "noMatch": "No record matches the filter.",
+      "columns": {
+        "name": "Name",
+        "type": "Type",
+        "ttl": "TTL",
+        "records": "Records"
+      },
+      "edit": "Edit {{type}} records of {{name}}",
+      "deleteLabel": "Delete {{type}} records of {{name}}",
+      "deleteTitle": "Delete {{type}} records of {{name}}?",
+      "deleteDescription": "All records of this name and type are removed.",
+      "deleteConfirm": "Delete",
+      "deleted": "{{type}} records of {{name}} deleted"
+    },
+    "rrset": {
+      "editTitle": "Edit {{type}} records of {{name}}",
+      "addTitle": "Add records",
+      "editDescription": "All records of this name and type are replaced.",
+      "addDescription": "One record per line; the same name and type form one set.",
+      "save": "Save",
+      "add": "Add",
+      "added": "Records added",
+      "saved": "{{type}} records of {{name}} saved",
+      "name": "Name",
+      "nameHint": "Relative to {{zone}}; @ is the zone itself.",
+      "type": "Type",
+      "ttl": "TTL (seconds)",
+      "records": "Records",
+      "txtHint": "Plain text; quotes are added for you.",
+      "absoluteHint": "Names in record data must be absolute (with a trailing dot).",
+      "checkForm": "Check the form",
+      "chooseType": "Choose a record type",
+      "enterRecord": "Enter at least one record",
+      "ttlNumber": "TTL must be a whole number of seconds"
+    },
+    "import": {
+      "button": "Import",
+      "title": "Import records",
+      "description": "Paste zone-file lines. Records of the same name and type replace the existing set; nothing else is deleted.",
+      "label": "Zone file",
+      "hint": "$ORIGIN and $TTL are honoured; names are relative to the zone. SOA lines are ignored.",
+      "noRecords": "No importable records found.",
+      "skipped": "Skipped lines",
+      "skippedLine": "Line {{line}}: {{reason}}",
+      "preview": "Preview",
+      "submit_one": "Import {{count}} set",
+      "submit_other": "Import {{count}} sets",
+      "done_one": "{{count}} record set imported",
+      "done_other": "{{count}} record sets imported",
+      "failed": "Import failed",
+      "reason": {
+        "soa": "the SOA is maintained by the server",
+        "outside": "{{name}} is outside {{zone}}",
+        "type": "{{type}} records cannot be imported",
+        "directive": "{{name}} is not supported",
+        "noType": "no record type",
+        "noData": "missing record data"
+      }
+    },
+    "dnssec": {
+      "title": "DNSSEC",
+      "description": "Signing with an ECDSA P-256 key; publish the DS record at the parent.",
+      "signed": "Signed · {{mode}}",
+      "off": "Off",
+      "denial": "Denial of existence",
+      "apply": "Apply",
+      "disable": "Disable",
+      "disableTitle": "Disable DNSSEC?",
+      "disableDescription": "Remove the DS record at the parent first, or resolvers will reject the zone.",
+      "enable": "Enable DNSSEC",
+      "ds": "DS records for the parent zone",
+      "dnskey": "DNSKEY"
+    },
+    "transfer": {
+      "title": "Zone transfer (AXFR)",
+      "description": "Secondaries may transfer the zone from the listed addresses or with a TSIG key.",
+      "allowFrom": "Allowed source addresses",
+      "allowHint": "IP addresses or CIDR ranges, one per line. Empty denies unsigned transfers.",
+      "saveAddresses": "Save addresses",
+      "saved": "Transfer addresses saved",
+      "tsigKeys": "TSIG keys",
+      "createKey": "Create key",
+      "dialog": {
+        "title": "Create TSIG key",
+        "description": "The secret is generated by the server and shown once.",
+        "submit": "Create",
+        "name": "Key name",
+        "algorithm": "Algorithm"
+      },
+      "noKeys": "No TSIG keys.",
+      "columns": {
+        "name": "Name",
+        "algorithm": "Algorithm"
+      },
+      "delete": {
+        "label": "Delete TSIG key {{name}}",
+        "title": "Delete TSIG key {{name}}?",
+        "description": "Secondaries signing with this key can no longer transfer the zone.",
+        "confirm": "Delete",
+        "done": "TSIG key {{name}} deleted"
+      },
+      "created": {
+        "title": "TSIG key created",
+        "description": "Copy the secret now; it is not shown again.",
+        "secret": "Secret",
+        "test": "Test transfer"
+      }
+    }
+  },
+  "admin": {
+    "title": "Administration",
+    "description": "Users, every hosted zone, challenge domains, published tokens and the server configuration.",
+    "lock": "Lock",
+    "gate": {
+      "title": "Admin area",
+      "description": "Enter the server's admin key. It is kept for this browser session only.",
+      "label": "Admin key",
+      "hint": "The api.admin_key value from the server configuration.",
+      "rejected": "Key rejected",
+      "unlock": "Unlock"
+    },
+    "tabs": {
+      "zones": "Zones",
+      "users": "Users",
+      "domains": "Domains",
+      "records": "TXT records",
+      "server": "Server"
+    },
+    "zones": {
+      "hint": "Toggle the exemption to serve a zone without a verified delegation. The base zone is always served.",
+      "createFor": "Create for user",
+      "chooseUser": "Choose a user",
+      "loadError": "Zones could not be loaded",
+      "empty": "No zones",
+      "filter": "Filter zones…",
+      "noMatch": "No zone matches the filter."
+    },
+    "users": {
+      "filter": "Filter users…",
+      "create": "Create user",
+      "dialog": {
+        "title": "Create user",
+        "submit": "Create",
+        "username": "Username",
+        "password": "Password"
+      },
+      "loadError": "Users could not be loaded",
+      "empty": "No users",
+      "noMatch": "No user matches the filter.",
+      "columns": {
+        "username": "Username",
+        "domains": "Domains",
+        "zones": "Zones",
+        "created": "Created"
+      },
+      "created": "User {{name}} created",
+      "reset": {
+        "label": "Reset password of {{name}}",
+        "title": "Reset password of {{name}}",
+        "description": "The user's sessions stay valid; tell them the new password out of band.",
+        "submit": "Reset password",
+        "new": "New password",
+        "hint": "At least 6 characters.",
+        "done": "Password of {{name}} reset"
+      },
+      "delete": {
+        "label": "Delete user {{name}}",
+        "title": "Delete {{name}}?",
+        "description": "The account, its keys, domains, tokens and zones are removed.",
+        "confirm": "Delete user",
+        "done": "User {{name}} deleted"
+      }
+    },
+    "domains": {
+      "filter": "Filter domains…",
+      "add": "Add domain for user",
+      "dialog": {
+        "title": "Add challenge domain",
+        "submit": "Add",
+        "user": "User",
+        "chooseUser": "Choose a user",
+        "domain": "Domain"
+      },
+      "loadError": "Domains could not be loaded",
+      "empty": "No challenge domains",
+      "noMatch": "No domain matches the filter.",
+      "columns": {
+        "domain": "Domain",
+        "owner": "Owner",
+        "target": "CNAME target"
+      },
+      "added": "{{domain}} added",
+      "remove": {
+        "label": "Remove {{domain}} for every user",
+        "title": "Remove {{domain}}?",
+        "description": "The domain is removed from every account that has it, with its tokens.",
+        "confirm": "Remove",
+        "done": "{{domain}} removed from every account"
+      }
+    },
+    "records": {
+      "filter": "Filter records…",
+      "loadError": "Records could not be loaded",
+      "empty": "No tokens published",
+      "noMatch": "No record matches the filter.",
+      "name": "Name",
+      "value": "Value",
+      "updated": "Updated"
+    },
+    "server": {
+      "config": {
+        "title": "Configuration",
+        "description": "Values from the server config, as reported by the public info endpoint.",
+        "baseZone": "Base zone",
+        "editRecords": "Edit records",
+        "challengeDomain": "Challenge domain",
+        "nameserver": "Nameserver",
+        "apiHost": "API host",
+        "registration": "Registration",
+        "open": "Open",
+        "closed": "Closed",
+        "version": "Version",
+        "capabilities": "Capabilities"
+      },
+      "totals": {
+        "title": "Totals",
+        "description": "Across all accounts.",
+        "users": "Users",
+        "domains": "Challenge domains",
+        "tokens": "Published tokens",
+        "zones": "Hosted zones",
+        "zonesDetail": "({{active}} active, {{pending}} pending)"
+      }
+    }
+  },
+  "errors": {
+    "generic": "Something went wrong",
+    "invalid_credentials": "Wrong username or password",
+    "user_exists": "That username is taken",
+    "username_taken": "That username is taken",
+    "invalid_username": "Usernames use letters, digits, dots, dashes and underscores",
+    "invalid_password": "The password is too short (at least 6 characters)",
+    "session_required": "Sign in with your password to do this",
+    "user_not_found": "User not found",
+    "domain_not_found": "Domain not found",
+    "name_required": "A name is required",
+    "invalid_json": "The request was malformed",
+    "invalid_admin_key": "Wrong admin key",
+    "admin_key_not_configured": "The admin API is disabled on this server",
+    "registration_disabled": "Registration is disabled on this server",
+    "domain_not_in_scope": "This API key does not cover that domain",
+    "domain_exists": "That domain is already added",
+    "domain_already_exists": "That domain is already added",
+    "zone_not_allowed": "That zone cannot be created here",
+    "zone_already_exists": "That zone already exists",
+    "zone_not_found": "Zone not found",
+    "zone_not_active": "The zone is not active yet",
+    "check_rate_limited": "Please wait a moment before checking again",
+    "check_failed": "The check could not be completed",
+    "tsig_key_exists": "A TSIG key with that name exists",
+    "tsig_key_not_found": "TSIG key not found",
+    "invalid_cidr": "Enter IP addresses or CIDR ranges",
+    "invalid_nsec_mode": "Choose NSEC or NSEC3",
+    "pdns_rejected": "The nameserver rejected the record"
+  }
+}

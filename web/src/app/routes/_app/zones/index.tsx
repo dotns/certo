@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useInfoQuery } from '@/features/info/hooks'
 import { CreateZoneDialog } from '@/features/zones/create-zone-dialog'
 import { useZonesQuery } from '@/features/zones/hooks'
@@ -15,6 +16,7 @@ export const Route = createFileRoute('/_app/zones/')({
 })
 
 function ZonesPage() {
+  const { t } = useTranslation()
   const zones = useZonesQuery('user')
   const info = useInfoQuery()
   const navigate = useNavigate()
@@ -22,20 +24,20 @@ function ZonesPage() {
   const nsTarget = info.data?.ns_target ?? ''
 
   useEffect(() => {
-    document.title = 'Zones · certo'
-  }, [])
+    document.title = t('titles.zones')
+  }, [t])
 
   return (
     <>
       <PageHeader
-        title="Hosted zones"
-        description={`Authoritative forward and reverse zones. Delegate a zone to ${nsTarget || 'this server'} and it is served after the next check.`}
+        title={t('zones.title')}
+        description={t('zones.description', { ns: nsTarget || t('zones.thisServer') })}
         actions={<CreateZoneDialog scope="user" nsTarget={nsTarget} onCreated={name => navigate({ to: '/zones/$zone', params: { zone: name } })} />}
       />
-      <ErrorAlert error={zones.error} title="Zones could not be loaded" />
+      <ErrorAlert error={zones.error} title={t('zones.loadError')} />
       <ErrorAlert error={actionError} />
       {zones.isPending && <Loading />}
-      {zones.data && zones.data.length === 0 && <EmptyState title="No zones yet" description="Add a zone to host its records here." />}
+      {zones.data && zones.data.length === 0 && <EmptyState title={t('zones.empty.title')} description={t('zones.empty.description')} />}
       {zones.data && zones.data.length > 0 && (
         <Card>
           <CardContent>

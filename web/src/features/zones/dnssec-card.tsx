@@ -1,5 +1,6 @@
 import type { Scope } from './api'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { CodeBlock } from '@/shared/components/code-block'
 import { ConfirmDialog } from '@/shared/components/confirm-dialog'
 import { ErrorAlert } from '@/shared/components/error-alert'
@@ -13,6 +14,7 @@ import { useDnssecQuery, useSetDnssecMutation } from './hooks'
 import { dsLines, NSEC_MODES } from './rrsets'
 
 export function DnssecCard({ scope, zone }: { scope: Scope, zone: string }) {
+  const { t } = useTranslation()
   const dnssec = useDnssecQuery(scope, zone, true)
   const set = useSetDnssecMutation(scope, zone)
   const [mode, setMode] = useState<string | null>(null)
@@ -21,17 +23,12 @@ export function DnssecCard({ scope, zone }: { scope: Scope, zone: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>DNSSEC</CardTitle>
-        <CardDescription>Signing with an ECDSA P-256 key; publish the DS record at the parent.</CardDescription>
+        <CardTitle>{t('zones.dnssec.title')}</CardTitle>
+        <CardDescription>{t('zones.dnssec.description')}</CardDescription>
         <CardAction>
           {dnssec.data && (dnssec.data.enabled
-            ? (
-                <Badge>
-                  Signed ·
-                  {dnssec.data.nsec_mode.toUpperCase()}
-                </Badge>
-              )
-            : <Badge variant="outline">Off</Badge>)}
+            ? <Badge>{t('zones.dnssec.signed', { mode: dnssec.data.nsec_mode.toUpperCase() })}</Badge>
+            : <Badge variant="outline">{t('zones.dnssec.off')}</Badge>)}
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -40,7 +37,7 @@ export function DnssecCard({ scope, zone }: { scope: Scope, zone: string }) {
         {dnssec.data && (
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="nsec-mode">Denial of existence</Label>
+              <Label htmlFor="nsec-mode">{t('zones.dnssec.denial')}</Label>
               <Select value={nsecMode} onValueChange={v => setMode(String(v))}>
                 <SelectTrigger id="nsec-mode" className="w-32">
                   <SelectValue />
@@ -54,26 +51,26 @@ export function DnssecCard({ scope, zone }: { scope: Scope, zone: string }) {
               ? (
                   <>
                     <Button type="button" variant="outline" disabled={set.isPending || nsecMode === dnssec.data.nsec_mode} onClick={() => set.mutate({ enabled: true, nsec_mode: nsecMode })}>
-                      Apply
+                      {t('zones.dnssec.apply')}
                     </Button>
                     <ConfirmDialog
-                      trigger={<Button variant="destructive" disabled={set.isPending}>Disable</Button>}
-                      title="Disable DNSSEC?"
-                      description="Remove the DS record at the parent first, or resolvers will reject the zone."
-                      confirmLabel="Disable"
+                      trigger={<Button variant="destructive" disabled={set.isPending}>{t('zones.dnssec.disable')}</Button>}
+                      title={t('zones.dnssec.disableTitle')}
+                      description={t('zones.dnssec.disableDescription')}
+                      confirmLabel={t('zones.dnssec.disable')}
                       onConfirm={() => set.mutateAsync({ enabled: false, nsec_mode: nsecMode })}
                     />
                   </>
                 )
               : (
                   <Button type="button" disabled={set.isPending} onClick={() => set.mutate({ enabled: true, nsec_mode: nsecMode })}>
-                    Enable DNSSEC
+                    {t('zones.dnssec.enable')}
                   </Button>
                 )}
           </div>
         )}
-        {dnssec.data?.ds && dnssec.data.ds.length > 0 && <CodeBlock title="DS records for the parent zone" code={dsLines(zone, dnssec.data.ds)} wrap />}
-        {dnssec.data?.dnskey && <CodeBlock title="DNSKEY" code={`${zone}. IN DNSKEY ${dnssec.data.dnskey}`} wrap />}
+        {dnssec.data?.ds && dnssec.data.ds.length > 0 && <CodeBlock title={t('zones.dnssec.ds')} code={dsLines(zone, dnssec.data.ds)} wrap />}
+        {dnssec.data?.dnskey && <CodeBlock title={t('zones.dnssec.dnskey')} code={`${zone}. IN DNSKEY ${dnssec.data.dnskey}`} wrap />}
       </CardContent>
     </Card>
   )

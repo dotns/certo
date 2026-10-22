@@ -1,5 +1,6 @@
 import type { FormEvent, ReactNode } from 'react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { Button } from '@/shared/components/ui/button'
 import {
@@ -27,7 +28,8 @@ interface FormDialogProps {
 }
 
 /** A dialog wrapping a form: submit runs the action, errors stay inline. */
-export function FormDialog({ trigger, title, description, submitLabel = 'Save', children, onSubmit, onClose, open: controlledOpen, onOpenChange }: FormDialogProps) {
+export function FormDialog({ trigger, title, description, submitLabel, children, onSubmit, onClose, open: controlledOpen, onOpenChange }: FormDialogProps) {
+  const { t } = useTranslation()
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
   const open = controlledOpen ?? uncontrolledOpen
   const [busy, setBusy] = useState(false)
@@ -70,8 +72,8 @@ export function FormDialog({ trigger, title, description, submitLabel = 'Save', 
           <div className="flex flex-col gap-4">{children}</div>
           <ErrorAlert error={error} />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>Cancel</Button>
-            <Button type="submit" disabled={busy}>{submitLabel}</Button>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>{t('common.cancel')}</Button>
+            <Button type="submit" disabled={busy}>{submitLabel ?? t('common.save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

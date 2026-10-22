@@ -1,5 +1,6 @@
 import type { FormEvent, ReactNode } from 'react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card'
@@ -10,6 +11,7 @@ import { useSession } from '@/shared/lib/session'
 
 /** Renders `children` once an admin key is stored for this browser session. */
 export function AdminGate({ children }: { children: ReactNode }) {
+  const { t } = useTranslation()
   const adminKey = useSession(s => s.adminKey)
   const setAdminKey = useSession(s => s.setAdminKey)
   const [value, setValue] = useState('')
@@ -39,24 +41,18 @@ export function AdminGate({ children }: { children: ReactNode }) {
   return (
     <Card className="max-w-md">
       <CardHeader>
-        <CardTitle>Admin area</CardTitle>
-        <CardDescription>Enter the server's admin key. It is kept for this browser session only.</CardDescription>
+        <CardTitle>{t('admin.gate.title')}</CardTitle>
+        <CardDescription>{t('admin.gate.description')}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} className="flex flex-col gap-4">
           <Field>
-            <FieldLabel htmlFor="admin-key">Admin key</FieldLabel>
+            <FieldLabel htmlFor="admin-key">{t('admin.gate.label')}</FieldLabel>
             <Input id="admin-key" type="password" autoComplete="off" required autoFocus value={value} onChange={e => setValue(e.target.value)} />
-            <FieldDescription>
-              The
-              {' '}
-              <code>api.admin_key</code>
-              {' '}
-              value from the server configuration.
-            </FieldDescription>
+            <FieldDescription>{t('admin.gate.hint')}</FieldDescription>
           </Field>
-          <ErrorAlert error={error} title="Key rejected" />
-          <Button type="submit" disabled={busy} className="self-start">Unlock</Button>
+          <ErrorAlert error={error} title={t('admin.gate.rejected')} />
+          <Button type="submit" disabled={busy} className="self-start">{t('admin.gate.unlock')}</Button>
         </form>
       </CardContent>
     </Card>

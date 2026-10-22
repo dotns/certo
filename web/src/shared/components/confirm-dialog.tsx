@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ErrorAlert } from '@/shared/components/error-alert'
 import {
   AlertDialog,
@@ -23,7 +24,8 @@ interface ConfirmDialogProps {
 }
 
 /** Asks before running a destructive action; shows the error inline when it fails. */
-export function ConfirmDialog({ trigger, title, description, confirmLabel = 'Confirm', destructive = true, onConfirm }: ConfirmDialogProps) {
+export function ConfirmDialog({ trigger, title, description, confirmLabel, destructive = true, onConfirm }: ConfirmDialogProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -60,9 +62,9 @@ export function ConfirmDialog({ trigger, title, description, confirmLabel = 'Con
         </AlertDialogHeader>
         <ErrorAlert error={error} />
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{t('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction variant={destructive ? 'destructive' : 'default'} disabled={busy} onClick={confirm}>
-            {confirmLabel}
+            {confirmLabel ?? t('common.confirm')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

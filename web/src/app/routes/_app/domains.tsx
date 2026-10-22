@@ -2,6 +2,7 @@ import type { CnameCheck, Domain } from '@/features/domains/api'
 import { createFileRoute } from '@tanstack/react-router'
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { CnameCheckButton, CnameResult } from '@/features/domains/cname-check'
 import { useAddDomainMutation, useDomainsQuery, useRecordsQuery, useRemoveDomainMutation } from '@/features/domains/hooks'
@@ -29,11 +30,12 @@ export const Route = createFileRoute('/_app/domains')({
 })
 
 /** The zone-file line a user adds at their DNS provider. */
-export function cnameLine(d: Domain): string {
+function cnameLine(d: Domain): string {
   return `_acme-challenge.${d.domain}. IN CNAME ${d.cname_target}.`
 }
 
 function DomainsPage() {
+  const { t } = useTranslation()
   const domains = useDomainsQuery()
   const records = useRecordsQuery()
   const add = useAddDomainMutation()
@@ -45,8 +47,8 @@ function DomainsPage() {
   const [checks, setChecks] = useState<Record<string, CnameCheck>>({})
 
   useEffect(() => {
-    document.title = 'Domains · certo'
-  }, [])
+    document.title = t('titles.domains')
+  }, [t])
 
   const visible = (domains.data ?? []).filter(d => matches(query, d.domain, d.cname_target))
   const tokensFor = (d: Domain) => (records.data ?? []).filter(r => r.domain === d.cname_target)
@@ -54,19 +56,19 @@ function DomainsPage() {
   return (
     <>
       <PageHeader
-        title="Challenge domains"
-        description="Each domain gets a CNAME target; ACME clients write their DNS-01 tokens there."
+        title={t('domains.title')}
+        description={t('domains.description')}
         actions={(
           <FormDialog
             trigger={(
               <Button>
                 <PlusIcon data-icon="inline-start" />
-                Add domain
+                {t('domains.add')}
               </Button>
             )}
-            title="Add domain"
-            description="The domain you request certificates for. A CNAME from its _acme-challenge name to the target shown afterwards completes the setup."
-            submitLabel="Add domain"
+            title={t('domains.addDialog.title')}
+            description={t('domains.addDialog.description')}
+            submitLabel={t('domains.addDialog.submit')}
             onSubmit={async () => {
               const d = await add.mutateAsync(newDomain.trim().toLowerCase())
               setCreated(d)
@@ -74,36 +76,36 @@ function DomainsPage() {
             onClose={() => setNewDomain('')}
           >
             <Field>
-              <FieldLabel htmlFor="new-domain">Domain</FieldLabel>
+              <FieldLabel htmlFor="new-domain">{t('domains.addDialog.label')}</FieldLabel>
               <Input id="new-domain" placeholder="example.com" required autoFocus value={newDomain} onChange={e => setNewDomain(e.target.value)} />
-              <FieldDescription>Wildcards and subdomains of this name use the same CNAME.</FieldDescription>
+              <FieldDescription>{t('domains.addDialog.hint')}</FieldDescription>
             </Field>
           </FormDialog>
         )}
       />
-      <ErrorAlert error={domains.error} title="Domains could not be loaded" />
+      <ErrorAlert error={domains.error} title={t('domains.loadError')} />
       {domains.isPending && <Loading />}
       {domains.data && domains.data.length === 0 && (
-        <EmptyState title="No domains yet" description="Add a domain to get its CNAME target, or let a global API key create it on first use." />
+        <EmptyState title={t('domains.empty.title')} description={t('domains.empty.description')} />
       )}
       {domains.data && domains.data.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Domains</CardTitle>
-            <CardDescription>Expand a row to see its published tokens; check the CNAME after setting it up.</CardDescription>
-            <SearchInput value={query} onChange={setQuery} placeholder="Filter domains…" />
+            <CardTitle>{t('domains.card.title')}</CardTitle>
+            <CardDescription>{t('domains.card.description')}</CardDescription>
+            <SearchInput value={query} onChange={setQuery} placeholder={t('domains.filter')} />
           </CardHeader>
           <CardContent>
-            {visible.length === 0 && <p className="text-sm text-muted-foreground">No domain matches the filter.</p>}
+            {visible.length === 0 && <p className="text-sm text-muted-foreground">{t('domains.noMatch')}</p>}
             {visible.length > 0 && (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-0"><span className="sr-only">Expand</span></TableHead>
-                    <TableHead>Domain</TableHead>
-                    <TableHead>CNAME target</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-0"><span className="sr-only">Actions</span></TableHead>
+                    <TableHead className="w-0"><span className="sr-only">{t('domains.columns.expand')}</span></TableHead>
+                    <TableHead>{t('domains.columns.domain')}</TableHead>
+                    <TableHead>{t('domains.columns.target')}</TableHead>
+                    <TableHead>{t('domains.columns.status')}</TableHead>
+                    <TableHead className="w-0"><span className="sr-only">{t('common.actions')}</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -115,14 +117,14 @@ function DomainsPage() {
                       <Fragment key={d.domain}>
                         <TableRow>
                           <TableCell>
-                            <Button type="button" variant="ghost" size="icon-xs" aria-label={open ? `Collapse ${d.domain}` : `Expand ${d.domain}`} aria-expanded={open} onClick={() => setExpanded(open ? null : d.domain)}>
+                            <Button type="button" variant="ghost" size="icon-xs" aria-label={open ? t('domains.collapse', { domain: d.domain }) : t('domains.expand', { domain: d.domain })} aria-expanded={open} onClick={() => setExpanded(open ? null : d.domain)}>
                               {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
                             </Button>
                           </TableCell>
                           <TableCell className="font-medium">
                             <div className="flex flex-wrap items-center gap-2">
                               {d.domain}
-                              {tokens.length > 0 && <Badge variant="secondary">{tokens.length === 1 ? '1 token' : `${tokens.length} tokens`}</Badge>}
+                              {tokens.length > 0 && <Badge variant="secondary">{t('domains.tokens', { count: tokens.length })}</Badge>}
                             </div>
                           </TableCell>
                           <TableCell>
@@ -139,13 +141,13 @@ function DomainsPage() {
                           </TableCell>
                           <TableCell>
                             <ConfirmDialog
-                              trigger={<Button variant="ghost" size="icon-sm" aria-label={`Remove ${d.domain}`}><Trash2Icon /></Button>}
-                              title={`Remove ${d.domain}?`}
-                              description="Its challenge records are deleted and clients using the CNAME stop working."
-                              confirmLabel="Remove"
+                              trigger={<Button variant="ghost" size="icon-sm" aria-label={t('domains.remove.label', { domain: d.domain })}><Trash2Icon /></Button>}
+                              title={t('domains.remove.title', { domain: d.domain })}
+                              description={t('domains.remove.description')}
+                              confirmLabel={t('domains.remove.confirm')}
                               onConfirm={async () => {
                                 await remove.mutateAsync(d.domain)
-                                toast.success(`${d.domain} removed`)
+                                toast.success(t('domains.remove.done', { domain: d.domain }))
                               }}
                             />
                           </TableCell>
@@ -155,14 +157,14 @@ function DomainsPage() {
                             <TableCell />
                             <TableCell colSpan={4}>
                               <div className="flex flex-col gap-3 py-1">
-                                <CodeBlock title="DNS record to add at your provider" code={cnameLine(d)} wrap />
+                                <CodeBlock title={t('domains.dnsRecord')} code={cnameLine(d)} wrap />
                                 <div className="flex flex-col gap-1">
-                                  <span className="text-sm font-medium">Published tokens</span>
-                                  {tokens.length === 0 && <span className="text-sm text-muted-foreground">None right now; they appear while a client validates a challenge.</span>}
-                                  {tokens.map(t => (
-                                    <div key={t.value} className="flex flex-wrap items-center gap-x-3 font-mono text-xs">
-                                      <span className="break-all">{t.value}</span>
-                                      <span className="text-muted-foreground">{formatIso(t.last_update)}</span>
+                                  <span className="text-sm font-medium">{t('domains.publishedTokens')}</span>
+                                  {tokens.length === 0 && <span className="text-sm text-muted-foreground">{t('domains.noTokens')}</span>}
+                                  {tokens.map(tok => (
+                                    <div key={tok.value} className="flex flex-wrap items-center gap-x-3 font-mono text-xs">
+                                      <span className="break-all">{tok.value}</span>
+                                      <span className="text-muted-foreground">{formatIso(tok.last_update)}</span>
                                     </div>
                                   ))}
                                 </div>
@@ -181,19 +183,19 @@ function DomainsPage() {
       )}
       <Card>
         <CardHeader>
-          <CardTitle>Active TXT records</CardTitle>
-          <CardDescription>Tokens currently published for your domains; they refresh every 15 seconds.</CardDescription>
+          <CardTitle>{t('domains.records.title')}</CardTitle>
+          <CardDescription>{t('domains.records.description')}</CardDescription>
         </CardHeader>
         <CardContent>
-          <ErrorAlert error={records.error} title="Records could not be loaded" />
-          {records.data && records.data.length === 0 && <p className="text-sm text-muted-foreground">No tokens published right now.</p>}
+          <ErrorAlert error={records.error} title={t('domains.records.loadError')} />
+          {records.data && records.data.length === 0 && <p className="text-sm text-muted-foreground">{t('domains.records.none')}</p>}
           {records.data && records.data.length > 0 && (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Updated</TableHead>
+                  <TableHead>{t('domains.records.name')}</TableHead>
+                  <TableHead>{t('domains.records.value')}</TableHead>
+                  <TableHead>{t('domains.records.updated')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -212,10 +214,10 @@ function DomainsPage() {
       <Dialog open={created !== null} onOpenChange={open => !open && setCreated(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{`${created?.domain ?? ''} added`}</DialogTitle>
-            <DialogDescription>Create this record at your DNS provider, then use "Check CNAME" on the domain row.</DialogDescription>
+            <DialogTitle>{t('domains.created.title', { domain: created?.domain ?? '' })}</DialogTitle>
+            <DialogDescription>{t('domains.created.description')}</DialogDescription>
           </DialogHeader>
-          {created && <CodeBlock title="DNS record" code={cnameLine(created)} wrap />}
+          {created && <CodeBlock title={t('domains.created.record')} code={cnameLine(created)} wrap />}
           <DialogFooter showCloseButton />
         </DialogContent>
       </Dialog>

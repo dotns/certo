@@ -6,11 +6,13 @@ describe('clientSnippets', () => {
     const clients = clientSnippets('httpreq', 'auth.example.org', 'alice', 'k-1')
     expect(clients.map(c => c.id)).toEqual(CLIENTS.map(c => c.id))
     const lego = clients.find(c => c.id === 'lego')!
+    expect(lego.snippets[0]?.title).toBe('clients.snippet.env')
     expect(lego.snippets[0]?.code).toContain('HTTPREQ_ENDPOINT=https://auth.example.org')
     expect(lego.snippets[0]?.code).toContain('HTTPREQ_USERNAME=alice')
     expect(lego.snippets[0]?.code).toContain('HTTPREQ_PASSWORD=k-1')
     expect(clients.find(c => c.id === 'traefik')!.snippets[0]?.code).toContain('provider: httpreq')
     expect(clients.find(c => c.id === 'caddy')!.snippets).toHaveLength(0)
+    expect(clients.find(c => c.id === 'caddy')!.note).toBe('clients.note.httpreqUnsupported')
   })
 
   it('fills the acme-dns snippets with the storage URL and the placeholder key', () => {

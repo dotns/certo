@@ -2,6 +2,7 @@ import type { ApiKey } from '@/features/keys/api'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useCreateKeyMutation, useDeleteKeyMutation, useKeysQuery } from '@/features/keys/hooks'
 import { isGlobalScope, normalizeScopes } from '@/features/keys/scopes'
@@ -27,6 +28,7 @@ export const Route = createFileRoute('/_app/keys')({
 })
 
 function KeysPage() {
+  const { t } = useTranslation()
   const keys = useKeysQuery()
   const create = useCreateKeyMutation()
   const remove = useDeleteKeyMutation()
@@ -35,8 +37,8 @@ function KeysPage() {
   const [created, setCreated] = useState<ApiKey | null>(null)
 
   useEffect(() => {
-    document.title = 'API keys · certo'
-  }, [])
+    document.title = t('titles.keys')
+  }, [t])
 
   const reset = () => {
     setName('')
@@ -46,18 +48,18 @@ function KeysPage() {
   return (
     <>
       <PageHeader
-        title="API keys"
-        description="Keys authenticate ACME clients (httpreq and acme-dns). A scoped key only reaches the domains it lists."
+        title={t('keys.title')}
+        description={t('keys.description')}
         actions={(
           <FormDialog
             trigger={(
               <Button>
                 <PlusIcon data-icon="inline-start" />
-                Create key
+                {t('keys.create')}
               </Button>
             )}
-            title="Create API key"
-            submitLabel="Create key"
+            title={t('keys.dialog.title')}
+            submitLabel={t('keys.dialog.submit')}
             onSubmit={async () => {
               const key = await create.mutateAsync({ name: name.trim(), scope: normalizeScopes(scopes) })
               setCreated(key)
@@ -65,19 +67,19 @@ function KeysPage() {
             onClose={reset}
           >
             <Field>
-              <FieldLabel htmlFor="key-name">Name</FieldLabel>
+              <FieldLabel htmlFor="key-name">{t('keys.dialog.name')}</FieldLabel>
               <Input id="key-name" placeholder="traefik-prod" required autoFocus value={name} onChange={e => setName(e.target.value)} />
             </Field>
             <Field>
-              <FieldLabel>Domains</FieldLabel>
+              <FieldLabel>{t('keys.dialog.domains')}</FieldLabel>
               <div className="flex flex-col gap-2">
                 {scopes.map((s, i) => (
                   // Rows are positional inputs; the index is the identity.
                   // eslint-disable-next-line react/no-array-index-key
                   <div key={i} className="flex items-center gap-2">
-                    <Input aria-label={`Domain ${i + 1}`} placeholder="*.example.com" value={s} onChange={e => setScopes(scopes.map((v, j) => (j === i ? e.target.value : v)))} />
+                    <Input aria-label={t('keys.dialog.domain', { n: i + 1 })} placeholder="*.example.com" value={s} onChange={e => setScopes(scopes.map((v, j) => (j === i ? e.target.value : v)))} />
                     {scopes.length > 1 && (
-                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove domain ${i + 1}`} onClick={() => setScopes(scopes.filter((_, j) => j !== i))}>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={t('keys.dialog.removeDomain', { n: i + 1 })} onClick={() => setScopes(scopes.filter((_, j) => j !== i))}>
                         <XIcon />
                       </Button>
                     )}
@@ -85,36 +87,28 @@ function KeysPage() {
                 ))}
                 <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setScopes([...scopes, ''])}>
                   <PlusIcon data-icon="inline-start" />
-                  Add domain
+                  {t('keys.dialog.addDomain')}
                 </Button>
               </div>
-              <FieldDescription>
-                <code>*.example.com</code>
-                {' '}
-                covers the domain and its subdomains,
-                {' '}
-                <code>example.com</code>
-                {' '}
-                the exact name. Leave empty for a global key.
-              </FieldDescription>
+              <FieldDescription>{t('keys.dialog.hint')}</FieldDescription>
             </Field>
           </FormDialog>
         )}
       />
-      <ErrorAlert error={keys.error} title="Keys could not be loaded" />
+      <ErrorAlert error={keys.error} title={t('keys.loadError')} />
       {keys.isPending && <Loading />}
-      {keys.data && keys.data.length === 0 && <EmptyState title="No API keys" description="Create a key to configure an ACME client." />}
+      {keys.data && keys.data.length === 0 && <EmptyState title={t('keys.empty.title')} description={t('keys.empty.description')} />}
       {keys.data && keys.data.length > 0 && (
         <Card>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="w-0"><span className="sr-only">Actions</span></TableHead>
+                  <TableHead>{t('keys.columns.name')}</TableHead>
+                  <TableHead>{t('keys.columns.key')}</TableHead>
+                  <TableHead>{t('keys.columns.scope')}</TableHead>
+                  <TableHead>{t('keys.columns.created')}</TableHead>
+                  <TableHead className="w-0"><span className="sr-only">{t('common.actions')}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -129,19 +123,19 @@ function KeysPage() {
                     </TableCell>
                     <TableCell>
                       {isGlobalScope(k.scope)
-                        ? <Badge variant="secondary">Global</Badge>
+                        ? <Badge variant="secondary">{t('keys.global')}</Badge>
                         : <span className="font-mono text-xs">{k.scope.join(', ')}</span>}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{formatUnix(k.created_at)}</TableCell>
                     <TableCell>
                       <ConfirmDialog
-                        trigger={<Button variant="ghost" size="icon-sm" aria-label={`Delete key ${k.name}`}><Trash2Icon /></Button>}
-                        title={`Delete key "${k.name}"?`}
-                        description="Clients using this key stop working immediately."
-                        confirmLabel="Delete"
+                        trigger={<Button variant="ghost" size="icon-sm" aria-label={t('keys.delete.label', { name: k.name })}><Trash2Icon /></Button>}
+                        title={t('keys.delete.title', { name: k.name })}
+                        description={t('keys.delete.description')}
+                        confirmLabel={t('keys.delete.confirm')}
                         onConfirm={async () => {
                           await remove.mutateAsync(k.id)
-                          toast.success(`Key "${k.name}" deleted`)
+                          toast.success(t('keys.delete.done', { name: k.name }))
                         }}
                       />
                     </TableCell>
@@ -155,14 +149,14 @@ function KeysPage() {
       <Dialog open={created !== null} onOpenChange={open => !open && setCreated(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{`Key "${created?.name ?? ''}" created`}</DialogTitle>
-            <DialogDescription>Copy it into your ACME client. It stays visible on this page, so you can come back for it.</DialogDescription>
+            <DialogTitle>{t('keys.created.title', { name: created?.name ?? '' })}</DialogTitle>
+            <DialogDescription>{t('keys.created.description')}</DialogDescription>
           </DialogHeader>
           {created && (
             <div className="flex flex-col gap-3">
-              <CodeBlock title="API key" code={created.key} wrap />
+              <CodeBlock title={t('keys.created.key')} code={created.key} wrap />
               <Link to="/config" search={{ key: created.id }} className="self-start">
-                <Button type="button" variant="outline" size="sm">Show client snippets with this key</Button>
+                <Button type="button" variant="outline" size="sm">{t('keys.created.snippets')}</Button>
               </Link>
             </div>
           )}
