@@ -156,3 +156,7 @@ Plan 20261022-0431-dashboard-i18n completed. Dashboard localized with `react-i18
 
 Base UI `Menu.GroupLabel` throws error #31 (`MenuGroupContext is missing`) unless it sits inside `Menu.Group` / `Menu.RadioGroup`; the account menu in the header rendered its label bare, so opening the menu crashed the page in the production build (v0.2.0). Wrapped in `DropdownMenuGroup`. `Menu.RadioItem` defaults to `closeOnClick=false`; the language menu sets it explicitly. Switching the language loads the bundle with `i18n.loadLanguages()` before `changeLanguage()` so the Suspense boundary never unmounts the open menu.
 
+
+## 2026-10-23 09:20 [progress]
+
+Task 20261023-0900-reject-public-suffix-zones: zone creation refuses names that are themselves a public suffix (`in-addr.arpa`, `ip6.arpa`, `co.uk`, `github.io`, …) with `403 zone_not_allowed`, using the Public Suffix List compiled in by `psl` 2.1.245 (ICANN and private sections). Such a zone could never be delegated but, as a pending zone, blocked every other user's zones below it for up to 30 days and could be re-created at once. The base zone and legacy imports bypass the rule. From the 2026-10-17 code review; its other two findings no longer applied (rrset patches to PowerDNS replaced full rebuilds, and the overlap check already runs inside the create transaction). Verified by new zone-service and API tests, 77 Rust tests, all gates and e2e 45/45.

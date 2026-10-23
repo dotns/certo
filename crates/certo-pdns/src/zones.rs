@@ -391,6 +391,9 @@ impl Zones {
         if names::inside(&name, &self.policy.base_zone) {
             return Err(ZoneOpError::NotAllowed("inside the server's own zone"));
         }
+        if names::is_public_suffix(&name) {
+            return Err(ZoneOpError::NotAllowed("a public suffix cannot be a zone"));
+        }
         let zone = self.db.create_zone(user_id, &name).await?;
         match self.run_check(&zone).await {
             Ok(updated) => Ok(updated),

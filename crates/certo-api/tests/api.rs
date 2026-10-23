@@ -597,6 +597,16 @@ async fn zones_are_private_and_scoped() {
         .await;
     assert_eq!(r.body["error"], "zone_not_allowed");
     let r = api
+        .json(
+            "POST",
+            "/api/zones",
+            &[("authorization", &alice)],
+            json!({"name": "in-addr.arpa"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.body["error"], "zone_not_allowed");
+    let r = api
         .get("/api/zones/auth.example.org", &[("authorization", &alice)])
         .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);

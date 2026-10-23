@@ -126,7 +126,10 @@ challenge domain); user zones may not be at or under `base_zone`.
 ### Hosted zones
 
 - A zone belongs to one user. Names need at least two labels and may not be at or under
-  `general.domain` or overlap another user's zone (`403 zone_not_allowed`).
+  `general.domain`, be a public suffix (`in-addr.arpa`, `co.uk`, `github.io`; checked
+  against the Public Suffix List compiled into the binary), or overlap another user's
+  zone (`403 zone_not_allowed`). Pending zones count for the overlap check, so without the
+  suffix rule one user could block every reverse zone.
 - Records are managed as rrsets (`name`, `type`, `ttl`, `records[]`) through
   `PATCH …/rrsets` with `REPLACE`/`DELETE` changes. certo checks the owner name is inside
   the zone, the type is in the allowed list (A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT;

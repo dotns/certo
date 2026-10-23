@@ -80,6 +80,12 @@ pub fn parse_key_name(input: &str) -> Result<String, ZoneOpError> {
         .map_err(|_| invalid("invalid_name", format!("invalid key name {input:?}")))
 }
 
+/// Whether `zone` (canonical) is itself a public suffix such as `in-addr.arpa` or `co.uk`;
+/// nobody can be delegated such a zone, and it would block every zone below it.
+pub fn is_public_suffix(zone: &str) -> bool {
+    psl::suffix(zone.as_bytes()).is_some_and(|s| s.is_known() && s.as_bytes() == zone.as_bytes())
+}
+
 /// Whether `zone` is under `in-addr.arpa` or `ip6.arpa`.
 pub fn is_reverse_zone(zone: &str) -> bool {
     zone.ends_with(".in-addr.arpa") || zone.ends_with(".ip6.arpa")

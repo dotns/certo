@@ -101,7 +101,7 @@ Administrators can exempt a zone from the check (see [Admin](#admin)).
 | Method | Path | Result |
 |---|---|---|
 | `GET` | `/api/zones` | `200 [zone]` |
-| `POST` | `/api/zones` | `201 zone`. Body `{"name"}`. Runs the delegation check immediately, so a correctly delegated zone is `active` in the response. Errors: `400 invalid_name`, `403 zone_not_allowed` (at/under the base domain, or overlapping another user's zone), `409 zone_already_exists` |
+| `POST` | `/api/zones` | `201 zone`. Body `{"name"}`. Runs the delegation check immediately, so a correctly delegated zone is `active` in the response. Errors: `400 invalid_name`, `403 zone_not_allowed` (at/under the base domain, a public suffix such as `in-addr.arpa` or `co.uk`, or overlapping another user's zone), `409 zone_already_exists` |
 | `GET` | `/api/zones/:zone` | `200 zone` with `rrsets` when active |
 | `DELETE` | `/api/zones/:zone` | `204` — removes the zone from PowerDNS with its records and keys; it stops resolving immediately |
 | `POST` | `/api/zones/:zone/verify` | `200 zone` after a fresh delegation check. `429 check_rate_limited` (one check per minute per zone), `503 check_failed` when the check could not be completed (`message` says why) |
@@ -260,7 +260,7 @@ validation errors.
 | `session_required` | Password change attempted with an API key instead of a dashboard session |
 | `invalid_password` | New password shorter than 6 characters |
 | `domain_not_found` | CNAME check for a domain the caller has not added |
-| `zone_not_allowed` | Zone name at/under the base domain or overlapping another user's zone; base zone deletion or de-exemption |
+| `zone_not_allowed` | Zone name at/under the base domain, a public suffix, or overlapping another user's zone; base zone deletion or de-exemption |
 | `zone_already_exists` | Zone name taken |
 | `zone_not_found` / `tsig_key_not_found` | No such zone (or not yours) or TSIG key |
 | `zone_not_active` | The zone is pending delegation; rrsets cannot be changed yet |

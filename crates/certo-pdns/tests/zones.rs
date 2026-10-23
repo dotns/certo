@@ -549,3 +549,25 @@ async fn repeated_failures_deactivate_and_snapshots_restore() {
         Err(certo_db::DbError::NotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn public_suffixes_cannot_become_zones() {
+    let h = harness().await;
+    h.zones.ensure_base_zone(&[]).await.unwrap();
+    let alice = h.db.create_user("alice", "h").await.unwrap();
+    let bob = h.db.create_user("bob", "h").await.unwrap();
+
+    for suffix in ["in-addr.arpa", "IP6.ARPA.", "co.uk", "github.io"] {
+        assert!(
+            matches!(
+                h.zones.create(Some(alice.id), suffix).await,
+                Err(ZoneOpError::NotAllowed(_))
+            ),
+            "{suffix}"
+        );
+    }
+    // Nothing was stored, so zones below those suffixes stay available to others.
+    for name in ["23.251.162.in-addr.arpa", "example.co.uk", "example.test"] {
+        h.zones.create(Some(bob.id), name).await.unwrap();
+    }
+}

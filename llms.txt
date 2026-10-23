@@ -365,7 +365,7 @@ Auth: Bearer JWT or API key (scoped keys only for zones inside their scope). Any
 | global_key_required | Scoped key tried to access profile/keys management (requires JWT or global key) |
 | admin_key_not_configured | Admin API not enabled |
 | invalid_admin_key | Wrong admin key |
-| zone_not_allowed | Zone at/under the server's base domain or overlapping another user's zone |
+| zone_not_allowed | Zone at/under the server's base domain, a public suffix (in-addr.arpa, co.uk), or overlapping another user's zone |
 | zone_already_exists / zone_not_found / tsig_key_not_found | Zone and key lookups |
 | zone_not_active | Zone still pending its delegation check; rrsets cannot be changed yet |
 | check_rate_limited / check_failed | /verify called again within a minute; delegation check could not complete |

@@ -26,6 +26,7 @@ certo-core       = { workspace = true }
 certo-db         = { workspace = true }
 hickory-resolver = { workspace = true }
 ipnet            = { workspace = true }
+psl              = { workspace = true }
 reqwest          = { workspace = true }
 rustc-hash       = { workspace = true }
 rusqlite   = { workspace = true }
