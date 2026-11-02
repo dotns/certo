@@ -97,7 +97,9 @@ DELETE /api/zones/{zone}/tsig-keys/{name}            → 204
 Admin: GET|POST /admin/zones ({"user_id","name"}), /admin/zones/{zone}/... for any user's zone,
        PUT /admin/zones/{zone}/activation {"exempt":true|false} (serve without a delegation check),
        GET /admin/sync → {"db_version","pdns_version","zones":[{"name","db","pdns"}]} (zones whose versions differ),
-       POST /admin/sync → same + {"created","removed","rrsets_changed","keys_imported","records_adopted"} (rebuilds PowerDNS from the database).
+       POST /admin/sync → same + {"created","removed","rrsets_changed","keys_imported","records_adopted"} (rebuilds PowerDNS from the database),
+       POST /admin/users/delete {"ids":[...]} → {"deleted"}, POST /admin/domains/delete {"domains":[...]} → {"deleted"},
+       GET /admin/cleanup?older_than_days=7 → {"accounts","older_than_days"} (unused anonymous acme-dns accounts), POST /admin/cleanup {"older_than_days":7} → {"deleted"}.
 ```
 Auth: Bearer JWT or API key (scoped keys only for zones inside their scope). A zone is served (and its rrsets editable, else `409 zone_not_active`) once the parent (registrar or IP block owner) delegates it to `ns_target`; checks run hourly while pending and daily while active. Record names are relative (`www`, `@`) or absolute; types A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT; PTR only in in-addr.arpa/ip6.arpa zones; TXT records are given unquoted. With DNSSEC on, publish the returned DS at the parent. AXFR is refused unless the source IP is allowed or the request is TSIG-signed.
 

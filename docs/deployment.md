@@ -206,6 +206,11 @@ otherwise the self-issued challenge cannot be validated.
   stamped on the PowerDNS zones (`GET /admin/sync`); "Sync DNS" (`POST /admin/sync`)
   rebuilds every PowerDNS zone from the database and reports what changed. Use it after
   touching PowerDNS by hand or when the two numbers differ.
+- **Housekeeping** — every hour (and once at startup) certo deletes challenge TXT values
+  older than 2 hours (ACME validates within minutes; acme-dns clients never remove them)
+  and anonymous acme-dns accounts (`POST /register`) that are 7 days old and never
+  published a value. The admin area's Users tab has "Clean up" to run the account part
+  with any age, and both the Users and Domains tabs delete selected rows in bulk.
 - **Sessions** — set `api.jwt_secret` explicitly, otherwise every restart invalidates all
   dashboard sessions.
 - **Admin API** — leave `api.admin_key` empty to keep `/admin/*` disabled.
@@ -242,3 +247,23 @@ otherwise the self-issued challenge cannot be validated.
   covered; start from a fresh database.
 - **Keys** — DNSSEC private keys and TSIG secrets live in PowerDNS' database under
   `[pdns] dir`; losing it means re-keying signed zones (new DS at the parent).
+
+## Amplification hardening
+
+The bundled PowerDNS is authoritative only: it never recurses, so it cannot be used as an
+open resolver. Against reflection with spoofed sources, the generated `pdns.conf` pins
+`any-to-tcp=yes` (`ANY` over UDP is answered truncated, forcing TCP) and
+`udp-truncation-threshold=1232` (larger UDP answers are truncated). Signed zones still
+produce answers several times the query size, and PowerDNS Authoritative has no response
+rate limiting, so limit UDP/53 per source on the host. With nftables:
+
+```sh
+nft add table inet dns
+nft add set inet dns ratelimit '{ type ipv4_addr; flags dynamic; timeout 1m; }'
+nft add chain inet dns input '{ type filter hook input priority 0; }'
+nft add rule inet dns input udp dport 53 add @ratelimit '{ ip saddr limit rate over 50/second burst 100 packets }' drop
+```
+
+Tune the rate to your traffic; large resolvers send more queries from one address than
+the figure above. For real response rate limiting (RRL) put dnsdist in front of certo's
+DNS port. Rate-limit UDP only: TCP cannot be spoofed and is where truncated clients retry.

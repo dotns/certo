@@ -225,6 +225,10 @@ All require `X-Admin-Key`. Disabled while `api.admin_key` is empty
 | `GET` | `/admin/domains` | `200` all domains with `owner` and `cname_target` |
 | `POST` | `/admin/domains` | `201` — body `{"user_id","domain"}`. `404 user_not_found`, `409 domain_already_exists` |
 | `DELETE` | `/admin/domains/:domain` | `204` — removes that domain from every user |
+| `POST` | `/admin/users/delete` | `200 {"deleted"}` — body `{"ids":[1,2]}`; deletes those users like `DELETE /admin/users/:id`, unknown ids are skipped. `400` when `ids` is empty |
+| `POST` | `/admin/domains/delete` | `200 {"deleted"}` — body `{"domains":["a.test"]}`; removes each domain from every user, `deleted` counts user/domain pairs |
+| `GET` | `/admin/cleanup` | `200 {"accounts","older_than_days"}` — query `older_than_days` (default 7): number of anonymous acme-dns accounts (`POST /register`) created before that and holding no TXT value |
+| `POST` | `/admin/cleanup` | `200 {"deleted"}` — body `{"older_than_days": 7}`; deletes those accounts with their domain and key. The hourly sweep does the same with 7 days |
 | `GET` | `/admin/records` | `200` all TXT records |
 | `GET` | `/admin/zones` | `200` all zones, with `owner`; includes the base zone (`"system": true`, no owner) |
 | `POST` | `/admin/zones` | `201` — body `{"user_id","name"}`; the zone starts the same activation cycle as a user-created one. `400` when a field is missing, `404 user_not_found` |

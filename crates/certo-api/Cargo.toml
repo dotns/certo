@@ -44,3 +44,5 @@ x509-parser  = { workspace = true }
 [dev-dependencies]
 certo-pdns     = { workspace = true, features = ["mock"] }
 http-body-util = { workspace = true }
+rusqlite       = { workspace = true }
+tempfile       = { workspace = true }

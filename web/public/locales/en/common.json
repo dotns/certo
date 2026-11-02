@@ -273,7 +273,7 @@
   },
   "zones": {
     "title": "Hosted zones",
-    "description": "Authoritative forward and reverse zones. Delegate a zone to {{ns}} and it is served after the next check.",
+    "description": "Authoritative forward and reverse zones. Delegate a zone's NS to {{ns}}; it is served once the next delegation check passes.",
     "thisServer": "this server",
     "loadError": "Zones could not be loaded",
     "empty": {
@@ -527,6 +527,24 @@
         "description": "The account, its keys, domains, tokens and zones are removed.",
         "confirm": "Delete user",
         "done": "User {{name}} deleted"
+      },
+      "selectAll": "Select all users shown",
+      "select": "Select {{name}}",
+      "deleteSelected": "Delete selected ({{count}})",
+      "bulkDelete": {
+        "title": "Delete {{count}} users?",
+        "description": "The accounts, their keys, domains, tokens and zones are removed.",
+        "confirm": "Delete users",
+        "done": "{{count}} users deleted"
+      },
+      "cleanup": {
+        "button": "Clean up",
+        "title": "Clean up unused acme-dns accounts",
+        "description": "Accounts created by POST /register that never published a token are deleted with their domain and key. The hourly sweep does the same once they are 7 days old.",
+        "days": "Older than (days)",
+        "preview": "{{count}} accounts would be deleted.",
+        "submit": "Delete accounts",
+        "done": "{{count}} unused accounts deleted"
       }
     },
     "domains": {
@@ -554,6 +572,15 @@
         "description": "The domain is removed from every account that has it, with its tokens.",
         "confirm": "Remove",
         "done": "{{domain}} removed from every account"
+      },
+      "selectAll": "Select all domains shown",
+      "select": "Select {{domain}}",
+      "deleteSelected": "Remove selected ({{count}})",
+      "bulkDelete": {
+        "title": "Remove {{count}} domains?",
+        "description": "Each domain is removed from every account that has it, with its tokens.",
+        "confirm": "Remove domains",
+        "done": "{{count}} domains removed"
       }
     },
     "records": {

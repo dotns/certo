@@ -273,7 +273,7 @@
   },
   "zones": {
     "title": "托管区域",
-    "description": "权威正向和反向区域。把区域委派到 {{ns}}，下次检查通过后即开始服务。",
+    "description": "权威正向与反向解析区域。把区域的 NS 委派到 {{ns}}，通过下一次委派检查后即对外解析。",
     "thisServer": "此服务器",
     "loadError": "无法加载区域",
     "empty": {
@@ -485,7 +485,7 @@
       "server": "服务器"
     },
     "zones": {
-      "hint": "切换豁免可在未验证委派的情况下服务该区域。基础区域始终服务。",
+      "hint": "切换豁免可在未验证委派的情况下对外解析该区域。基础区域始终对外解析。",
       "createFor": "为用户创建",
       "chooseUser": "选择用户",
       "loadError": "无法加载区域",
@@ -527,6 +527,24 @@
         "description": "该账户及其密钥、域名、令牌和区域都将被删除。",
         "confirm": "删除用户",
         "done": "已删除用户 {{name}}"
+      },
+      "selectAll": "选择显示的全部用户",
+      "select": "选择 {{name}}",
+      "deleteSelected": "删除所选（{{count}}）",
+      "bulkDelete": {
+        "title": "删除 {{count}} 个用户？",
+        "description": "这些账号及其密钥、域名、令牌和区域都会被删除。",
+        "confirm": "删除用户",
+        "done": "已删除 {{count}} 个用户"
+      },
+      "cleanup": {
+        "button": "清理",
+        "title": "清理未使用的 acme-dns 账号",
+        "description": "由 POST /register 自动创建、从未发布过令牌的账号会连同其域名和密钥一起删除。每小时的例行清理会在账号满 7 天后自动执行同样的操作。",
+        "days": "创建超过（天）",
+        "preview": "将删除 {{count}} 个账号。",
+        "submit": "删除账号",
+        "done": "已删除 {{count}} 个未使用账号"
       }
     },
     "domains": {
@@ -554,6 +572,15 @@
         "description": "该域名将连同其令牌从所有拥有它的账户中移除。",
         "confirm": "移除",
         "done": "已从所有账户移除 {{domain}}"
+      },
+      "selectAll": "选择显示的全部域名",
+      "select": "选择 {{domain}}",
+      "deleteSelected": "移除所选（{{count}}）",
+      "bulkDelete": {
+        "title": "移除 {{count}} 个域名？",
+        "description": "每个域名都会从所有拥有它的账号中移除，连同其令牌。",
+        "confirm": "移除域名",
+        "done": "已移除 {{count}} 个域名"
       }
     },
     "records": {

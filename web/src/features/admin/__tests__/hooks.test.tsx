@@ -7,8 +7,12 @@ import {
   useAdminDomainsQuery,
   useAdminRecordsQuery,
   useAdminUsersQuery,
+  useCleanupMutation,
+  useCleanupPreviewQuery,
   useCreateUserMutation,
+  useDeleteDomainsMutation,
   useDeleteUserMutation,
+  useDeleteUsersMutation,
   useRemoveDomainEverywhereMutation,
   useSyncMutation,
   useSyncStatusQuery,
@@ -91,5 +95,32 @@ describe('admin hooks', () => {
     expect(report.removed).toBe(1)
     await waitFor(() => expect(result.current.status.data?.zones).toEqual([]))
     expect(calls.filter(c => c.url === '/admin/sync').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('deletes users and domains in bulk and cleans up unused accounts', async () => {
+    useSession.getState().setAdminKey('adm')
+    const calls = stubFetch((call) => {
+      if (call.url === '/admin/users/delete')
+        return { deleted: (call.body as { ids: number[] }).ids.length }
+      if (call.url === '/admin/domains/delete')
+        return { deleted: (call.body as { domains: string[] }).domains.length }
+      if (call.url === '/admin/cleanup?older_than_days=30')
+        return { accounts: 4, older_than_days: 30 }
+      if (call.url === '/admin/cleanup' && call.method === 'POST')
+        return { deleted: 4 }
+      return []
+    })
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => ({
+      users: useDeleteUsersMutation(),
+      domains: useDeleteDomainsMutation(),
+      preview: useCleanupPreviewQuery(30),
+      cleanup: useCleanupMutation(),
+    }), { wrapper })
+    await waitFor(() => expect(result.current.preview.data?.accounts).toBe(4))
+    expect((await act(() => result.current.users.mutateAsync([1, 2]))).deleted).toBe(2)
+    expect((await act(() => result.current.domains.mutateAsync(['a.test']))).deleted).toBe(1)
+    expect((await act(() => result.current.cleanup.mutateAsync(30))).deleted).toBe(4)
+    expect(calls.find(c => c.url === '/admin/cleanup' && c.method === 'POST')?.body).toEqual({ older_than_days: 30 })
   })
 })

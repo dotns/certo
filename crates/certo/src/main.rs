@@ -106,11 +106,12 @@ fn supervisor_nsname(config: &Config) -> String {
     }
 }
 
-/// Runs the delegation checks on a fixed schedule.
-async fn check_periodically(zones: Zones) {
+/// Runs the delegation checks and the housekeeping sweep on a fixed schedule.
+async fn check_periodically(zones: Zones, state: AppState) {
     let mut tick = tokio::time::interval(PENDING_CHECK_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        sweep(&state).await;
         tick.tick().await;
         match zones.run_checks().await {
             Ok(report) if report.checked > 0 => info!(?report, "zone checks done"),
@@ -120,14 +121,24 @@ async fn check_periodically(zones: Zones) {
     }
 }
 
+async fn sweep(state: &AppState) {
+    match certo_api::maintenance::sweep(state).await {
+        Ok(report) if report.expired_names > 0 || report.accounts > 0 => {
+            info!(?report, "housekeeping done");
+        }
+        Ok(_) => {}
+        Err(e) => warn!(error = %e, "housekeeping failed"),
+    }
+}
+
 async fn run(config: Config, config_path: &std::path::Path) -> anyhow::Result<()> {
     info!(file = %config_path.display(), "using config file");
     info!("starting up");
     let db = Db::open(&config.database.connection).context("database initialization failed")?;
     let (supervisor, zones) = start_zones(&config, db.clone()).await?;
-    let checks = tokio::spawn(check_periodically(zones.clone()));
     let api_state = AppState::new(db, zones.clone(), ApiOptions::from_config(&config))
         .context("API initialization failed")?;
+    let checks = tokio::spawn(check_periodically(zones.clone(), api_state.clone()));
 
     let api_addr = format!("{}:{}", config.api.ip, config.api.port);
     let listener = std::net::TcpListener::bind(&api_addr)

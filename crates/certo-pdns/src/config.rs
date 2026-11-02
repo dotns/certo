@@ -114,6 +114,8 @@ impl PdnsConfig {
              default-soa-content={nsname} {nsadmin} 0 10800 3600 604800 3600\n\
              allow-axfr-ips=\n\
              security-poll-suffix=\n\
+             any-to-tcp=yes\n\
+             udp-truncation-threshold=1232\n\
              api=yes\n\
              api-key={api_key}\n\
              webserver=yes\n\
@@ -190,6 +192,8 @@ mod tests {
             "webserver-port=8081",
             "default-soa-content=ns1.example.com hostmaster.example.com 0 10800 3600 604800 3600",
             "loglevel=5",
+            "any-to-tcp=yes",
+            "udp-truncation-threshold=1232",
         ] {
             assert!(conf.lines().any(|l| l == line), "missing {line}\n{conf}");
         }

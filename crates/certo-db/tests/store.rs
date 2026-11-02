@@ -392,3 +392,66 @@ async fn delete_user_removes_keys_and_domains() {
     assert!(db.subdomain_owner(&d.subdomain).await.is_err());
     assert!(db.api_key_by_value(&key.key).await.is_err());
 }
+
+#[tokio::test]
+async fn stale_acmedns_accounts_and_expired_txt() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("certo.db");
+    let db = Db::open(path.to_str().unwrap()).unwrap();
+    let sql = |q: &str| Connection::open(&path).unwrap().execute_batch(q).unwrap();
+    let base = "dns.example.net";
+    let alice = db.create_user("alice", "h").await.unwrap();
+    db.add_user_domain(alice.id, "alice", "example.com")
+        .await
+        .unwrap();
+    let (used, _, used_sub) = db.create_acmedns_account(Vec::new()).await.unwrap();
+    let (unused, _, _) = db.create_acmedns_account(Vec::new()).await.unwrap();
+    let (fresh, _, _) = db.create_acmedns_account(Vec::new()).await.unwrap();
+    db.present_txt(&format!("{used_sub}.{base}"), "v")
+        .await
+        .unwrap();
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    // Age everything but `fresh` (and alice) by eight days.
+    sql(&format!(
+        "UPDATE users SET created_at = created_at - 8*24*3600 WHERE username IN ('{used}','{unused}','alice')"
+    ));
+    let stale = db
+        .stale_acmedns_accounts(now - 7 * 24 * 3600, base)
+        .await
+        .unwrap();
+    assert_eq!(
+        stale
+            .iter()
+            .map(|u| u.username.as_str())
+            .collect::<Vec<_>>(),
+        [unused.as_str()]
+    );
+    assert!(fresh.starts_with("acme-"));
+
+    // Expiry: values older than the cut-off (or never stamped) go, newer ones stay.
+    db.present_txt("old.dns.example.net", "o").await.unwrap();
+    sql("UPDATE txt SET LastUpdate = LastUpdate - 3*3600 WHERE Domain='old.dns.example.net';
+         INSERT INTO txt (Domain, Value, LastUpdate) VALUES ('nostamp.dns.example.net', 'n', NULL);");
+    let mut names = db.expire_txt(now - 2 * 3600).await.unwrap();
+    names.sort();
+    assert_eq!(names, ["nostamp.dns.example.net", "old.dns.example.net"]);
+    assert!(
+        db.txt_for_domain("old.dns.example.net")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        db.txt_for_domain(&format!("{used_sub}.{base}"))
+            .await
+            .unwrap(),
+        ["v"]
+    );
+    assert!(db.expire_txt(now - 2 * 3600).await.unwrap().is_empty());
+}

@@ -186,6 +186,10 @@ PUT /admin/users/:id/password {"password"} → 204
 GET /admin/domains → [{domain, subdomain, cname_target, owner}]
 POST /admin/domains {"user_id", "domain"} → {domain, subdomain, cname_target}
 DELETE /admin/domains/:domain → 204
+POST /admin/users/delete {"ids": [1, 2]} → {deleted}
+POST /admin/domains/delete {"domains": ["a.test"]} → {deleted}
+GET /admin/cleanup?older_than_days=7 → {accounts, older_than_days} (unused anonymous acme-dns accounts)
+POST /admin/cleanup {"older_than_days": 7} → {deleted}
 
 GET /admin/zones → [zone + owner] (includes the base zone, "system": true)
 POST /admin/zones {"user_id", "name"} → zone

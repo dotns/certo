@@ -448,6 +448,52 @@ impl Db {
         .await
     }
 
+    /// Anonymous acme-dns accounts created before `before` whose subdomains never got a
+    /// challenge value.
+    pub async fn stale_acmedns_accounts(
+        &self,
+        before: i64,
+        base_domain: &str,
+    ) -> Result<Vec<User>, DbError> {
+        let base_domain = base_domain.to_owned();
+        self.run(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT u.id, u.username, u.password_hash, u.created_at FROM users u
+                 WHERE u.password_hash=?1 AND u.created_at < ?2
+                   AND NOT EXISTS (SELECT 1 FROM user_domains d JOIN txt t ON t.Domain = d.subdomain || '.' || ?3
+                                   WHERE d.user_id = u.id)
+                 ORDER BY u.id",
+            )?;
+            let rows = stmt.query_map(params![NO_LOGIN_HASH, before, base_domain], user_row)?;
+            Ok(rows.collect::<Result<_, _>>()?)
+        })
+        .await
+    }
+
+    /// Removes challenge values last written before `before` (or never stamped); returns
+    /// the affected names.
+    pub async fn expire_txt(&self, before: i64) -> Result<Vec<String>, DbError> {
+        self.run(move |c| {
+            let tx = c.transaction()?;
+            let names: Vec<String> = tx
+                .prepare(
+                    "SELECT DISTINCT Domain FROM txt WHERE LastUpdate IS NULL OR LastUpdate < ?1",
+                )?
+                .query_map([before], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            if !names.is_empty() {
+                tx.execute(
+                    "DELETE FROM txt WHERE LastUpdate IS NULL OR LastUpdate < ?1",
+                    [before],
+                )?;
+                crate::zones::bump_base_zone(&tx)?;
+            }
+            tx.commit()?;
+            Ok(names)
+        })
+        .await
+    }
+
     /// Deletes a user with their keys, domains (and their challenge TXT values) and zones.
     /// Returns the internal challenge names whose TXT values were removed.
     pub async fn delete_user(

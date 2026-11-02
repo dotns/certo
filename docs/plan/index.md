@@ -35,3 +35,4 @@ Each plan is a single line linking to its detail file. All detailed information 
 - [x] [**20261022-0431-dashboard-i18n Localize the dashboard (English and Simplified Chinese)**](20261022-0431-dashboard-i18n.md) `2026-10-22`
 - [x] [**20261101-2101-breaking-upgrade-schema-5 Breaking upgrade: schema 5 with a single upgrade path and a config-derived base zone**](20261101-2101-breaking-upgrade-schema-5.md) `2026-11-01`
 - [x] [**20261102-1006-certo-db-source-of-truth Keep every DNS fact in certo.db and derive PowerDNS from it**](20261102-1006-certo-db-source-of-truth.md) `2026-11-02`
+- [x] [**20261102-1703-admin-bulk-delete-and-cleanup Bulk deletion of users and domains and cleanup of unused acme-dns registrations**](20261102-1703-admin-bulk-delete-and-cleanup.md) `2026-11-02`

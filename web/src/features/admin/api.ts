@@ -46,3 +46,13 @@ export interface SyncReport extends SyncStatus {
 
 export const getSyncStatus = () => request<SyncStatus>('/admin/sync', { admin: true })
 export const runSync = () => request<SyncReport>('/admin/sync', { admin: true, method: 'POST' })
+
+export interface CleanupPreview {
+  accounts: number
+  older_than_days: number
+}
+
+export const deleteUsers = (ids: number[]) => request<{ deleted: number }>('/admin/users/delete', { admin: true, method: 'POST', body: { ids } })
+export const deleteDomains = (domains: string[]) => request<{ deleted: number }>('/admin/domains/delete', { admin: true, method: 'POST', body: { domains } })
+export const getCleanupPreview = (days: number) => request<CleanupPreview>(`/admin/cleanup?older_than_days=${days}`, { admin: true })
+export const runCleanup = (days: number) => request<{ deleted: number }>('/admin/cleanup', { admin: true, method: 'POST', body: { older_than_days: days } })

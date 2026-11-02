@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from '@/shared/lib/session'
-import { addDomainFor, createUser, deleteUser, getSyncStatus, listAllDomains, listAllRecords, listUsers, removeDomainEverywhere, resetPassword, runSync } from './api'
+import { addDomainFor, createUser, deleteDomains, deleteUser, deleteUsers, getCleanupPreview, getSyncStatus, listAllDomains, listAllRecords, listUsers, removeDomainEverywhere, resetPassword, runCleanup, runSync } from './api'
 
 export const adminUsersKey = ['admin', 'users'] as const
 export const adminDomainsKey = ['admin', 'domains'] as const
@@ -72,5 +72,34 @@ export function useSyncMutation() {
   return useMutation({
     mutationFn: runSync,
     onSuccess: () => client.invalidateQueries({ queryKey: adminSyncKey }).then(() => client.invalidateQueries({ queryKey: ['zones'] })),
+  })
+}
+
+export function useDeleteUsersMutation() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: deleteUsers,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['admin'] }).then(() => client.invalidateQueries({ queryKey: ['zones'] })),
+  })
+}
+
+export function useDeleteDomainsMutation() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: deleteDomains,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['admin'] }),
+  })
+}
+
+export function useCleanupPreviewQuery(days: number) {
+  const key = useAdminKey()
+  return useQuery({ queryKey: ['admin', 'cleanup', days], queryFn: () => getCleanupPreview(days), enabled: !!key && days >= 0 })
+}
+
+export function useCleanupMutation() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: runCleanup,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['admin'] }),
   })
 }

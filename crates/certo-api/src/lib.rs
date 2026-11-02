@@ -8,6 +8,7 @@ mod auth;
 mod cors;
 mod error;
 mod httpreq;
+pub mod maintenance;
 mod spa;
 mod state;
 mod tls;
@@ -78,6 +79,12 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/admin/users/{id}",
             axum::routing::delete(admin::delete_user),
+        )
+        .route("/admin/users/delete", post(admin::delete_users))
+        .route("/admin/domains/delete", post(admin::delete_domains))
+        .route(
+            "/admin/cleanup",
+            get(admin::cleanup_preview).post(admin::cleanup),
         )
         .route("/admin/users/{id}/password", put(admin::reset_password))
         .route(

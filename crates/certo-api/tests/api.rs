@@ -33,6 +33,9 @@ fn options() -> ApiOptions {
 }
 
 struct Api {
+    state: AppState,
+    db_path: std::path::PathBuf,
+    _dir: tempfile::TempDir,
     app: Router,
     pdns: MockPdns,
     checker: Arc<ScriptedChecker>,
@@ -46,7 +49,9 @@ struct Resp {
 
 impl Api {
     async fn new(opts: ApiOptions, peer: &str) -> Self {
-        let db = Db::open(":memory:").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("certo.db");
+        let db = Db::open(db_path.to_str().unwrap()).unwrap();
         let pdns = MockPdns::start().await.unwrap();
         let checker = Arc::new(ScriptedChecker::default());
         let policy = ZonePolicy {
@@ -65,10 +70,21 @@ impl Api {
         let state = AppState::new(db, zones, opts).unwrap();
         let peer: SocketAddr = peer.parse().unwrap();
         Self {
-            app: certo_api::app(state).layer(MockConnectInfo(peer)),
+            app: certo_api::app(state.clone()).layer(MockConnectInfo(peer)),
             pdns,
             checker,
+            state,
+            db_path,
+            _dir: dir,
         }
+    }
+
+    /// Runs raw SQL on the test database (to move timestamps around).
+    fn sql(&self, sql: &str) {
+        rusqlite::Connection::open(&self.db_path)
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
     }
 
     /// Whether the mock pdns serves `zone`.
@@ -1061,4 +1077,142 @@ async fn domain_cname_check_reports_the_observed_target() {
         )
         .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admins_delete_users_and_domains_in_bulk() {
+    let api = Api::new(options(), "127.0.0.1:1").await;
+    let admin = [("x-admin-key", "admin")];
+    let mut accounts = Vec::new();
+    for _ in 0..3 {
+        accounts.push(register_acmedns(&api, &[]).await);
+    }
+    let users = api.get("/admin/users", &admin).await.body;
+    let id_of = |name: &str| {
+        users
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["username"] == name)
+            .unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    };
+    let r = api
+        .json("POST", "/admin/users/delete", &admin, json!({"ids": []}))
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = api
+        .json("POST", "/admin/users/delete", &[], json!({"ids": [1]}))
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = api
+        .json(
+            "POST",
+            "/admin/users/delete",
+            &admin,
+            json!({"ids": [id_of(&accounts[0].0), id_of(&accounts[1].0), 999_999]}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body, json!({"deleted": 2}));
+    let users = api.get("/admin/users", &admin).await.body;
+    assert_eq!(users.as_array().unwrap().len(), 1);
+    assert_eq!(users[0]["username"], accounts[2].0);
+
+    let r = api
+        .json(
+            "POST",
+            "/admin/domains/delete",
+            &admin,
+            json!({"domains": []}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = api
+        .json(
+            "POST",
+            "/admin/domains/delete",
+            &admin,
+            json!({"domains": [accounts[2].2, "nope.test"]}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body, json!({"deleted": 1}));
+    assert_eq!(api.get("/admin/domains", &admin).await.body, json!([]));
+}
+
+#[tokio::test]
+async fn cleanup_and_sweep_remove_unused_accounts_and_expired_values() {
+    let api = Api::new(options(), "127.0.0.1:1").await;
+    let admin = [("x-admin-key", "admin")];
+    let (used, key, sub) = register_acmedns(&api, &[]).await;
+    let (unused, _, _) = register_acmedns(&api, &[]).await;
+    let (fresh, _, _) = register_acmedns(&api, &[]).await;
+    let txt = "a".repeat(43);
+    let hdr = [("x-api-user", used.as_str()), ("x-api-key", key.as_str())];
+    let r = api
+        .json(
+            "POST",
+            "/update",
+            &hdr,
+            json!({"subdomain": sub, "txt": txt}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let name = format!("{sub}.auth.example.org");
+    assert_eq!(
+        api.pdns
+            .zone("auth.example.org")
+            .unwrap()
+            .contents(&name, "TXT")
+            .len(),
+        1
+    );
+    api.sql(&format!(
+        "UPDATE users SET created_at = created_at - 8*24*3600 WHERE username IN ('{used}','{unused}')"
+    ));
+
+    let r = api.get("/admin/cleanup", &admin).await;
+    assert_eq!(r.body, json!({"accounts": 1, "older_than_days": 7}));
+    let r = api.get("/admin/cleanup?older_than_days=30", &admin).await;
+    assert_eq!(r.body["accounts"], 0);
+    let r = api.json("POST", "/admin/cleanup", &admin, json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body, json!({"deleted": 1}));
+    let names: Vec<String> = api
+        .get("/admin/users", &admin)
+        .await
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["username"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, [used.clone(), fresh.clone()]);
+
+    // The hourly sweep: the value ages past the retention, the used account becomes stale.
+    api.sql("UPDATE txt SET LastUpdate = LastUpdate - 3*3600");
+    let report = certo_api::maintenance::sweep(&api.state).await.unwrap();
+    assert_eq!((report.expired_names, report.accounts), (1, 1));
+    assert_eq!(api.get("/admin/records", &admin).await.body, json!([]));
+    assert_eq!(
+        api.pdns
+            .zone("auth.example.org")
+            .unwrap()
+            .contents(&name, "TXT"),
+        Vec::<String>::new()
+    );
+    let names: Vec<String> = api
+        .get("/admin/users", &admin)
+        .await
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["username"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, [fresh]);
+    let report = certo_api::maintenance::sweep(&api.state).await.unwrap();
+    assert_eq!(report, certo_api::maintenance::SweepReport::default());
 }

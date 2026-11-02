@@ -32,7 +32,9 @@ data goes through the API.
    database does not serve are removed, active zones are created or converged from the
    zone tables. A sync failure aborts the start.
 6. Start the HTTP server (plain, PEM files, or ACME via certo's own DNS) and the hourly
-   delegation-check loop.
+   loop: a housekeeping sweep (`certo_api::maintenance::sweep`: challenge TXT values older
+   than 2 h and unused anonymous acme-dns accounts older than 7 days are deleted and the
+   affected names re-synced), then the delegation checks.
 7. Run until the HTTP server fails, PowerDNS crashes too often, or SIGINT/SIGTERM arrives;
    shutdown drains HTTP for up to 10 s, then sends PowerDNS SIGTERM and SIGKILL after 10 s.
 

@@ -1,17 +1,18 @@
 //! Operator endpoints under `/admin`, guarded by `X-Admin-Key`.
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use certo_db::DbError;
 use certo_pdns::{SyncReport, SyncStatus};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::{Admin, JsonBody, hash_password},
     error::{ApiError, ApiResult},
+    maintenance::{ACMEDNS_ACCOUNT_RETENTION, stale_accounts},
     state::AppState,
     views::{DomainView, TxtView, UserView, txt_views},
     web::{Credentials, add_domain_for, delete_user_for, set_password, sync_txt},
@@ -162,4 +163,122 @@ pub(crate) async fn sync(_: Admin, State(state): State<AppState>) -> ApiResult<J
     let report = state.zones.sync(true).await?;
     tracing::info!(?report, "dns sync run by admin");
     Ok(Json(report))
+}
+
+#[derive(Serialize)]
+pub(crate) struct Deleted {
+    deleted: usize,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct UserIds {
+    ids: Vec<i64>,
+}
+
+/// `POST /admin/users/delete`: deletes every listed user; unknown ids are skipped.
+pub(crate) async fn delete_users(
+    _: Admin,
+    State(state): State<AppState>,
+    JsonBody(req): JsonBody<UserIds>,
+) -> ApiResult<Json<Deleted>> {
+    if req.ids.is_empty() {
+        return Err(ApiError::bad_request("ids required"));
+    }
+    let mut deleted = 0;
+    for id in req.ids {
+        if state.db.user_by_id(id).await.is_err() {
+            continue;
+        }
+        delete_user_for(&state, id).await?;
+        deleted += 1;
+    }
+    tracing::info!(deleted, "users deleted by admin");
+    Ok(Json(Deleted { deleted }))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct DomainNames {
+    domains: Vec<String>,
+}
+
+/// `POST /admin/domains/delete`: removes every listed domain from every user.
+pub(crate) async fn delete_domains(
+    _: Admin,
+    State(state): State<AppState>,
+    JsonBody(req): JsonBody<DomainNames>,
+) -> ApiResult<Json<Deleted>> {
+    if req.domains.is_empty() {
+        return Err(ApiError::bad_request("domains required"));
+    }
+    let users = state
+        .db
+        .list_users()
+        .await
+        .map_err(|e| ApiError::db("admin delete domains", &e))?;
+    let mut deleted = 0;
+    for domain in req.domains {
+        let domain = domain.trim().to_lowercase();
+        for u in &users {
+            if let Ok(Some(name)) = state
+                .db
+                .remove_user_domain(u.id, &domain, &state.opts.base_domain)
+                .await
+            {
+                sync_txt(&state, &name).await;
+                deleted += 1;
+            }
+        }
+    }
+    tracing::info!(deleted, "domains deleted by admin");
+    Ok(Json(Deleted { deleted }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CleanupParams {
+    #[serde(default = "default_cleanup_days")]
+    older_than_days: u32,
+}
+
+fn default_cleanup_days() -> u32 {
+    u32::try_from(ACMEDNS_ACCOUNT_RETENTION.as_secs() / 86_400).unwrap_or(7)
+}
+
+#[derive(Serialize)]
+pub(crate) struct CleanupPreview {
+    accounts: usize,
+    older_than_days: u32,
+}
+
+/// `GET /admin/cleanup`: how many unused acme-dns accounts a cleanup would delete.
+pub(crate) async fn cleanup_preview(
+    _: Admin,
+    State(state): State<AppState>,
+    Query(params): Query<CleanupParams>,
+) -> ApiResult<Json<CleanupPreview>> {
+    let accounts = stale_accounts(&state, params.older_than_days).await?.len();
+    Ok(Json(CleanupPreview {
+        accounts,
+        older_than_days: params.older_than_days,
+    }))
+}
+
+/// `POST /admin/cleanup`: deletes unused acme-dns accounts older than the given days.
+pub(crate) async fn cleanup(
+    _: Admin,
+    State(state): State<AppState>,
+    JsonBody(params): JsonBody<CleanupParams>,
+) -> ApiResult<Json<Deleted>> {
+    let mut deleted = 0;
+    for user in stale_accounts(&state, params.older_than_days).await? {
+        delete_user_for(&state, user.id).await?;
+        deleted += 1;
+    }
+    tracing::info!(
+        deleted,
+        days = params.older_than_days,
+        "acme-dns accounts cleaned up by admin"
+    );
+    Ok(Json(Deleted { deleted }))
 }
