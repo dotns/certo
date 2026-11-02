@@ -10,6 +10,8 @@ import {
   useCreateUserMutation,
   useDeleteUserMutation,
   useRemoveDomainEverywhereMutation,
+  useSyncMutation,
+  useSyncStatusQuery,
 } from '../hooks'
 
 describe('admin hooks', () => {
@@ -70,5 +72,24 @@ describe('admin hooks', () => {
     await act(() => result.current.deleteUser.mutateAsync(1))
     await waitFor(() => expect(result.current.users.data).toEqual([expect.objectContaining({ id: 2 })]))
     expect(calls.every(c => c.url.startsWith('/admin/'))).toBe(true)
+  })
+
+  it('reads the sync status and runs a sync with the admin key', async () => {
+    useSession.getState().setAdminKey('adm')
+    let status = { db_version: 5, pdns_version: 4, zones: [{ name: 'a.test', db: 3, pdns: 2 }] }
+    const calls = stubFetch((call) => {
+      if (call.url === '/admin/sync' && call.method === 'POST') {
+        status = { db_version: 5, pdns_version: 5, zones: [] }
+        return { ...status, created: 0, removed: 1, rrsets_changed: 2, keys_imported: 0, records_adopted: 0 }
+      }
+      return status
+    })
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => ({ status: useSyncStatusQuery(), run: useSyncMutation() }), { wrapper })
+    await waitFor(() => expect(result.current.status.data?.zones).toHaveLength(1))
+    const report = await act(() => result.current.run.mutateAsync())
+    expect(report.removed).toBe(1)
+    await waitFor(() => expect(result.current.status.data?.zones).toEqual([]))
+    expect(calls.filter(c => c.url === '/admin/sync').length).toBeGreaterThanOrEqual(3)
   })
 })

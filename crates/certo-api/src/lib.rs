@@ -89,6 +89,7 @@ fn api_router(state: AppState) -> Router {
             axum::routing::delete(admin::remove_domain),
         )
         .route("/admin/records", get(admin::list_records))
+        .route("/admin/sync", get(admin::sync_status).post(admin::sync))
         .route("/api/zones", get(zones::list).post(zones::create))
         .route(
             "/admin/zones",

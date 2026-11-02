@@ -7,7 +7,8 @@ mod types;
 
 pub use types::{
     ACMEDNS_TXT_LENGTH, ApiKey, MAX_TXT_VALUE_LENGTH, TxtRecord, User, UserDomain, Zone,
-    extract_domain_from_fqdn, extract_subdomain_from_fqdn, internal_domain, sanitize_fqdn,
+    ZoneDnssec, ZoneRrSet, ZoneTsigKey, extract_domain_from_fqdn, extract_subdomain_from_fqdn,
+    internal_domain, sanitize_fqdn,
 };
 
 /// Release version: `$CERTO_VERSION` at build time (set from the git tag), else the

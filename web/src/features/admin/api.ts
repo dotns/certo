@@ -23,3 +23,26 @@ export const listAllRecords = () => request<TxtRecord[]>('/admin/records', { adm
 export function resetPassword(body: { id: number, password: string }) {
   return request<void>(`/admin/users/${body.id}/password`, { admin: true, method: 'PUT', body: { password: body.password } })
 }
+
+export interface ZoneVersions {
+  name: string
+  db: number | null
+  pdns: number | null
+}
+
+export interface SyncStatus {
+  db_version: number
+  pdns_version: number
+  zones: ZoneVersions[]
+}
+
+export interface SyncReport extends SyncStatus {
+  created: number
+  removed: number
+  rrsets_changed: number
+  keys_imported: number
+  records_adopted: number
+}
+
+export const getSyncStatus = () => request<SyncStatus>('/admin/sync', { admin: true })
+export const runSync = () => request<SyncReport>('/admin/sync', { admin: true, method: 'POST' })

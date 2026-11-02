@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSession } from '@/shared/lib/session'
-import { addDomainFor, createUser, deleteUser, listAllDomains, listAllRecords, listUsers, removeDomainEverywhere, resetPassword } from './api'
+import { addDomainFor, createUser, deleteUser, getSyncStatus, listAllDomains, listAllRecords, listUsers, removeDomainEverywhere, resetPassword, runSync } from './api'
 
 export const adminUsersKey = ['admin', 'users'] as const
 export const adminDomainsKey = ['admin', 'domains'] as const
 export const adminRecordsKey = ['admin', 'records'] as const
+export const adminSyncKey = ['admin', 'sync'] as const
 
 export function useAdminKey() {
   return useSession(s => s.adminKey)
@@ -59,4 +60,17 @@ export function useRemoveDomainEverywhereMutation() {
 
 export function useResetPasswordMutation() {
   return useMutation({ mutationFn: resetPassword })
+}
+
+export function useSyncStatusQuery() {
+  const key = useAdminKey()
+  return useQuery({ queryKey: adminSyncKey, queryFn: getSyncStatus, enabled: !!key, refetchInterval: 15_000 })
+}
+
+export function useSyncMutation() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: runSync,
+    onSuccess: () => client.invalidateQueries({ queryKey: adminSyncKey }).then(() => client.invalidateQueries({ queryKey: ['zones'] })),
+  })
 }

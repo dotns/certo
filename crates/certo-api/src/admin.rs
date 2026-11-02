@@ -6,6 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use certo_db::DbError;
+use certo_pdns::{SyncReport, SyncStatus};
 use serde::Deserialize;
 
 use crate::{
@@ -146,4 +147,19 @@ pub(crate) async fn list_records(
         .await
         .map_err(|e| ApiError::db("admin list records", &e))?;
     Ok(Json(txt_views(records)))
+}
+
+/// `GET /admin/sync`: how far `PowerDNS` is from the database.
+pub(crate) async fn sync_status(
+    _: Admin,
+    State(state): State<AppState>,
+) -> ApiResult<Json<SyncStatus>> {
+    Ok(Json(state.zones.status().await?))
+}
+
+/// `POST /admin/sync`: rebuilds every `PowerDNS` zone from the database.
+pub(crate) async fn sync(_: Admin, State(state): State<AppState>) -> ApiResult<Json<SyncReport>> {
+    let report = state.zones.sync(true).await?;
+    tracing::info!(?report, "dns sync run by admin");
+    Ok(Json(report))
 }

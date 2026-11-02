@@ -86,19 +86,30 @@ async fn base_zone_is_seeded_once_and_serves_challenge_txt() {
     h.zones.ensure_base_zone(&seed).await.unwrap();
     let base = h.db.zone("dns.example.net").await.unwrap();
     assert!(base.is_system() && base.active && base.exempt);
+    assert!(h.pdns.zone("dns.example.net").is_none());
+    let report = h.zones.sync(false).await.unwrap();
+    assert_eq!((report.created, report.rrsets_changed), (1, 2));
+    assert!(report.status.zones.is_empty());
+    assert_eq!(report.status.db_version, report.status.pdns_version);
     let served = h.pdns.zone("dns.example.net").unwrap();
     assert_eq!(served.contents("dns.example.net", "A"), ["198.51.100.1"]);
     assert_eq!(
         served.contents("dns.example.net", "NS"),
         ["ns1.dns.example.net."]
     );
+    assert_eq!(
+        served.metadata.get(certo_pdns::VERSION_METADATA).unwrap(),
+        &[base.version.to_string()]
+    );
     assert!(h.pdns.zone("other.example.org").is_none());
 
-    // Second start: nothing is re-seeded.
+    // Second start: nothing is re-seeded, nothing to converge.
     h.zones
         .ensure_base_zone(&["dns.example.net. A 203.0.113.9".to_owned()])
         .await
         .unwrap();
+    let report = h.zones.sync(false).await.unwrap();
+    assert_eq!((report.created, report.rrsets_changed), (0, 0));
     assert_eq!(
         h.pdns
             .zone("dns.example.net")
@@ -158,7 +169,7 @@ async fn base_zone_is_seeded_once_and_serves_challenge_txt() {
             .is_empty()
     );
 
-    // Reconcile: stale TTL-1 TXT rrsets go, database values come back, own token is kept.
+    // Sync: stale TXT rrsets go, database values come back, the own token is kept.
     h.zones.set_own_challenge(Some("own-token")).await.unwrap();
     h.pdns
         .client()
@@ -176,8 +187,13 @@ async fn base_zone_is_seeded_once_and_serves_challenge_txt() {
     h.db.present_txt("fresh.dns.example.net", "f")
         .await
         .unwrap();
-    let n = h.zones.reconcile_txt().await.unwrap();
-    assert_eq!(n, 2);
+    let status = h.zones.status().await.unwrap();
+    assert_eq!(status.zones.len(), 1);
+    assert_eq!(status.zones[0].name, "dns.example.net");
+    assert_eq!(status.db_version, status.pdns_version + 1);
+    let report = h.zones.sync(false).await.unwrap();
+    assert_eq!(report.rrsets_changed, 2);
+    assert!(report.status.zones.is_empty());
     let z = h.pdns.zone("dns.example.net").unwrap();
     assert!(z.contents("stale.dns.example.net", "TXT").is_empty());
     assert_eq!(z.contents("fresh.dns.example.net", "TXT"), ["\"f\""]);
@@ -195,6 +211,7 @@ async fn base_zone_above_the_challenge_domain() {
         "dns.corp.example.net. A 198.51.100.1".to_owned(),
     ];
     h.zones.ensure_base_zone(&seed).await.unwrap();
+    h.zones.sync(false).await.unwrap();
     assert!(h.db.zone("corp.example.net").await.unwrap().is_system());
     assert!(h.db.zone("dns.corp.example.net").await.is_err());
     assert!(h.pdns.zone("dns.corp.example.net").is_none());
@@ -218,7 +235,7 @@ async fn base_zone_above_the_challenge_domain() {
         z.contents("_acme-challenge.corp.example.net", "TXT"),
         ["\"own\""]
     );
-    assert_eq!(h.zones.reconcile_txt().await.unwrap(), 1);
+    assert_eq!(h.zones.sync(true).await.unwrap().rrsets_changed, 0);
     assert_eq!(
         h.pdns
             .zone("corp.example.net")
@@ -476,7 +493,7 @@ async fn exemption_dnssec_and_transfers() {
 }
 
 #[tokio::test]
-async fn repeated_failures_deactivate_and_snapshots_restore() {
+async fn repeated_failures_deactivate_and_stored_records_restore() {
     let h = harness().await;
     h.zones.ensure_base_zone(&[]).await.unwrap();
     let alice = h.db.create_user("alice", "h").await.unwrap();
@@ -514,15 +531,13 @@ async fn repeated_failures_deactivate_and_snapshots_restore() {
     let off = h.db.zone("flaky.test").await.unwrap();
     assert!(!off.active);
     assert!(h.pdns.zone("flaky.test").is_none());
-    assert!(
-        h.db.zone_snapshot(off.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .contains("192.0.2.7")
-    );
+    assert!(matches!(
+        h.zones.rrsets(&off).await,
+        Err(ZoneOpError::NotActive)
+    ));
+    assert_eq!(h.db.zone_rrsets(off.id).await.unwrap().len(), 2);
 
-    // Delegation comes back: records are restored from the snapshot.
+    // Delegation comes back: records are restored from the database.
     h.checker.set(Ok(Delegation::Delegated));
     h.sql("UPDATE zones SET last_check = last_check - 2*3600 WHERE name='flaky.test'");
     let report = h.zones.run_checks().await.unwrap();
@@ -570,4 +585,179 @@ async fn public_suffixes_cannot_become_zones() {
     for name in ["23.251.162.in-addr.arpa", "example.co.uk", "example.test"] {
         h.zones.create(Some(bob.id), name).await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn sync_rebuilds_pdns_from_the_database() {
+    let h = harness().await;
+    h.zones
+        .ensure_base_zone(&["dns.example.net. A 198.51.100.1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(h.zones.sync(false).await.unwrap().created, 1);
+    let alice = h.db.create_user("alice", "h").await.unwrap();
+    let pending = h.zones.create(Some(alice.id), "keyed.test").await.unwrap();
+    let zone = h.zones.set_exempt(&pending, true).await.unwrap();
+    h.zones
+        .patch_rrsets(&zone, &[change("www", "A", &["192.0.2.10"])])
+        .await
+        .unwrap();
+    let on = h.zones.set_dnssec(&zone, true, "nsec3").await.unwrap();
+    let (_, secret) = h
+        .zones
+        .add_tsig_key(&zone, "xfr", "hmac-sha256")
+        .await
+        .unwrap();
+    h.zones
+        .set_transfer_allow_from(&zone, &["192.0.2.0/24".into()])
+        .await
+        .unwrap();
+    let status = h.zones.status().await.unwrap();
+    assert!(status.zones.is_empty(), "{status:?}");
+    assert_eq!(status.db_version, status.pdns_version);
+    let zone = h.zones.get("keyed.test").await.unwrap();
+    assert_eq!(
+        h.pdns
+            .zone("keyed.test")
+            .unwrap()
+            .metadata
+            .get(certo_pdns::VERSION_METADATA)
+            .unwrap(),
+        &[zone.version.to_string()]
+    );
+
+    // pdns lost everything: both zones come back with records, key, TSIG and allow list.
+    h.pdns.reset();
+    let status = h.zones.status().await.unwrap();
+    assert_eq!(status.zones.len(), 2);
+    assert_eq!(status.pdns_version, 0);
+    let report = h.zones.sync(false).await.unwrap();
+    assert_eq!((report.created, report.keys_imported), (2, 1));
+    assert!(report.status.zones.is_empty());
+    let served = h.pdns.zone("keyed.test").unwrap();
+    assert_eq!(served.contents("www.keyed.test", "A"), ["192.0.2.10"]);
+    assert_eq!(
+        served.contents("keyed.test", "NS"),
+        ["ns1.dns.example.net."]
+    );
+    assert_eq!(served.nsec3param, "1 0 0 -");
+    assert_eq!(
+        served.metadata.get("ALLOW-AXFR-FROM").unwrap(),
+        &["192.0.2.0/24"]
+    );
+    assert_eq!(served.metadata.get("TSIG-ALLOW-AXFR").unwrap(), &["xfr"]);
+    let again = h.zones.dnssec(&zone).await.unwrap();
+    assert_eq!((again.enabled, again.nsec_mode.as_str()), (true, "nsec3"));
+    assert_eq!(again.ds, on.ds);
+    let keys = h.pdns.tsig_keys();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(
+        (keys[0].name.as_str(), keys[0].key.as_str()),
+        ("xfr", secret.as_str())
+    );
+    assert_eq!(
+        h.pdns
+            .zone("dns.example.net")
+            .unwrap()
+            .contents("dns.example.net", "A"),
+        ["198.51.100.1"]
+    );
+
+    // Zones and keys the database does not know are removed.
+    h.pdns
+        .client()
+        .create_zone(&certo_pdns::NewZone::native(
+            "orphan.test.",
+            vec!["ns1.dns.example.net.".into()],
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+    h.pdns
+        .client()
+        .create_tsig_key(&certo_pdns::TsigKey {
+            id: String::new(),
+            name: "stray".into(),
+            algorithm: "hmac-sha256".into(),
+            key: String::new(),
+        })
+        .await
+        .unwrap();
+    let status = h.zones.status().await.unwrap();
+    assert_eq!(status.zones.len(), 1);
+    assert_eq!(
+        (
+            status.zones[0].name.as_str(),
+            status.zones[0].db,
+            status.zones[0].pdns
+        ),
+        ("orphan.test", None, None)
+    );
+    let report = h.zones.sync(false).await.unwrap();
+    assert_eq!(report.removed, 1);
+    assert!(h.pdns.zone("orphan.test").is_none());
+    assert_eq!(h.pdns.tsig_keys().len(), 1);
+
+    // A change made behind certo's back keeps the stamp, so only a forced sync undoes it.
+    h.pdns
+        .client()
+        .patch_rrsets(
+            "keyed.test",
+            &[certo_pdns::RrSet::replace(
+                "rogue.keyed.test.",
+                "A",
+                60,
+                vec![certo_pdns::RecordData::new("203.0.113.1")],
+            )],
+        )
+        .await
+        .unwrap();
+    assert!(h.zones.status().await.unwrap().zones.is_empty());
+    assert_eq!(h.zones.sync(false).await.unwrap().rrsets_changed, 0);
+    assert_eq!(h.zones.sync(true).await.unwrap().rrsets_changed, 1);
+    assert!(
+        h.pdns
+            .zone("keyed.test")
+            .unwrap()
+            .contents("rogue.keyed.test", "A")
+            .is_empty()
+    );
+
+    // A pdns zone without a stamp is adopted into the database instead of overwritten.
+    let row =
+        h.db.create_zone(Some(alice.id), "adopt.test")
+            .await
+            .unwrap();
+    h.db.activate_zone(row.id, true).await.unwrap();
+    h.pdns
+        .client()
+        .create_zone(&certo_pdns::NewZone::native(
+            "adopt.test.",
+            vec!["ns1.dns.example.net.".into()],
+            vec![certo_pdns::RrSet::replace(
+                "www.adopt.test.",
+                "A",
+                300,
+                vec![certo_pdns::RecordData::new("192.0.2.77")],
+            )],
+        ))
+        .await
+        .unwrap();
+    h.pdns
+        .client()
+        .add_csk("adopt.test", "ecdsa256")
+        .await
+        .unwrap();
+    let report = h.zones.sync(false).await.unwrap();
+    assert_eq!((report.records_adopted, report.keys_imported), (2, 0));
+    let stored = h.db.zone_rrsets(row.id).await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[1].name, "www.adopt.test.");
+    assert_eq!(stored[1].records, ["192.0.2.77"]);
+    assert!(h.db.zone_dnssec(row.id).await.unwrap().is_some());
+    let served = h.pdns.zone("adopt.test").unwrap();
+    assert_eq!(served.contents("www.adopt.test", "A"), ["192.0.2.77"]);
+    assert_eq!(served.keys.len(), 1);
+    assert!(served.metadata.contains_key(certo_pdns::VERSION_METADATA));
+    assert!(h.zones.status().await.unwrap().zones.is_empty());
 }

@@ -588,6 +588,17 @@
         "tokens": "已发布令牌",
         "zones": "托管区域",
         "zonesDetail": "（{{active}} 个已生效，{{pending}} 个待委派）"
+      },
+      "sync": {
+        "title": "DNS 同步",
+        "description": "certo 数据库是唯一数据源，PowerDNS 由它重建。版本号随每一次影响解析结果的更改递增。",
+        "dbVersion": "数据库版本",
+        "pdnsVersion": "PowerDNS 版本",
+        "inSync": "已同步",
+        "drift": "{{count}} 个区域有差异",
+        "zones": "差异",
+        "run": "同步 DNS",
+        "done": "DNS 已同步：新建 {{created}}，删除 {{removed}}，记录集变更 {{rrsets_changed}}，导入密钥 {{keys_imported}}，采纳 {{records_adopted}}，仍有差异 {{drift}}"
       }
     }
   },

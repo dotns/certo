@@ -167,6 +167,9 @@ pub struct CryptoKey {
     /// DS rdata, one per digest type.
     #[serde(default)]
     pub ds: Vec<String>,
+    /// Private key in ISC format; only in the answer for a single key.
+    #[serde(default)]
+    pub privatekey: String,
 }
 
 const fn default_true() -> bool {
@@ -373,12 +376,28 @@ impl Client {
             .await
     }
 
+    /// One DNSSEC key with its private key content.
+    pub async fn cryptokey(&self, zone: &str, id: u32) -> Result<CryptoKey, PdnsError> {
+        self.get_json(&format!("/zones/{}/cryptokeys/{id}", zone_id(zone)))
+            .await
+    }
+
     /// Adds an active, published CSK (`algorithm` is a pdns mnemonic such as `ecdsa256`).
     pub async fn add_csk(&self, zone: &str, algorithm: &str) -> Result<CryptoKey, PdnsError> {
         self.send_json(
             reqwest::Method::POST,
             &format!("/zones/{}/cryptokeys", zone_id(zone)),
             &serde_json::json!({ "keytype": "csk", "active": true, "published": true, "algorithm": algorithm }),
+        )
+        .await
+    }
+
+    /// Imports an active, published CSK from its private key content (ISC format).
+    pub async fn import_csk(&self, zone: &str, content: &str) -> Result<CryptoKey, PdnsError> {
+        self.send_json(
+            reqwest::Method::POST,
+            &format!("/zones/{}/cryptokeys", zone_id(zone)),
+            &serde_json::json!({ "keytype": "csk", "active": true, "published": true, "content": content }),
         )
         .await
     }

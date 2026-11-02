@@ -138,8 +138,8 @@ Rrsets (the PowerDNS model: one entry per owner name and type):
 - PTR only in `in-addr.arpa` / `ip6.arpa` zones; CNAME not at the apex and alone at its
   name; a `REPLACE` with no records (`400 invalid_data`). Anything PowerDNS refuses is
   `400 pdns_rejected` with its message.
-- The SOA is maintained by PowerDNS; every change bumps its serial and is served
-  immediately (and signed when DNSSEC is on).
+- The SOA is maintained by PowerDNS and not part of the rrset list; every change bumps
+  its serial and is served immediately (and signed when DNSSEC is on).
 
 ## httpreq protocol
 
@@ -230,6 +230,8 @@ All require `X-Admin-Key`. Disabled while `api.admin_key` is empty
 | `POST` | `/admin/zones` | `201` — body `{"user_id","name"}`; the zone starts the same activation cycle as a user-created one. `400` when a field is missing, `404 user_not_found` |
 | `PUT` | `/admin/zones/:zone/activation` | `200 zone` — body `{"exempt": true}` serves the zone without a delegation check and skips re-checks; `false` returns it to the normal cycle. The base zone cannot be de-exempted (`403 zone_not_allowed`) |
 | any | `/admin/zones/:zone/...` | Every per-zone route of [Hosted zones](#hosted-zones), on any user's zone and on the base zone (which cannot be deleted) |
+| `GET` | `/admin/sync` | `200 {"db_version","pdns_version","zones":[{"name","db","pdns"}]}` — sum of the data versions of all active zones in the database vs. the versions stamped on the PowerDNS zones; `zones` lists only the zones whose versions differ (`db` null: PowerDNS zone the database does not serve; `pdns` null: zone or stamp missing in PowerDNS) |
+| `POST` | `/admin/sync` | `200` — rebuilds every PowerDNS zone from the database (also run at startup) and answers with the status above plus `created`, `removed`, `rrsets_changed`, `keys_imported`, `records_adopted` |
 
 ## Error codes
 

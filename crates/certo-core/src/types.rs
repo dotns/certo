@@ -107,8 +107,47 @@ pub struct Zone {
     pub last_error: Option<String>,
     /// Consecutive failed checks since the last success.
     pub failed_checks: u32,
+    /// Data version: incremented with every change to what `PowerDNS` serves for the zone.
+    pub version: i64,
+    /// CIDRs allowed to transfer the zone without TSIG.
+    pub axfr_allow_from: Vec<String>,
     /// Unix seconds.
     pub created_at: i64,
+}
+
+/// All stored records of one owner name and type in a hosted zone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneRrSet {
+    /// Owner name, lowercase with trailing dot.
+    pub name: String,
+    /// Record type mnemonic, uppercase.
+    pub rtype: String,
+    /// TTL in seconds.
+    pub ttl: u32,
+    /// Presentation-format rdata; an empty list removes the rrset.
+    pub records: Vec<String>,
+}
+
+/// The signing key of a zone, as `PowerDNS` exports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneDnssec {
+    /// NSEC3 instead of NSEC.
+    pub nsec3: bool,
+    /// Algorithm mnemonic, e.g. `ECDSAP256SHA256`.
+    pub algorithm: String,
+    /// Private key in ISC format.
+    pub private_key: String,
+}
+
+/// A TSIG key allowed to transfer a zone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneTsigKey {
+    /// Key name, lowercase without trailing dot.
+    pub name: String,
+    /// Algorithm, e.g. `hmac-sha256`.
+    pub algorithm: String,
+    /// Base64 secret.
+    pub secret: String,
 }
 
 impl Zone {

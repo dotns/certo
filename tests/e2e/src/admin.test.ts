@@ -40,3 +40,20 @@ describe("admin (X-Admin-Key)", () => {
     expect((await req("GET", "/admin/records", { headers: adminHdr() })).status).toBe(200);
   });
 });
+
+describe("admin sync", () => {
+  const adminHdr = () => ({ "X-Admin-Key": srv.adminKey });
+
+  test("GET reports no drift; POST rebuilds and reports", async () => {
+    const status = await req("GET", "/admin/sync", { headers: adminHdr() });
+    expect(status.status).toBe(200);
+    expect(status.body.zones).toEqual([]);
+    expect(status.body.db_version).toBeGreaterThan(0);
+    expect(status.body.pdns_version).toBe(status.body.db_version);
+    const run = await req("POST", "/admin/sync", { headers: adminHdr() });
+    expect(run.status, run.text).toBe(200);
+    expect(run.body).toMatchObject({ created: 0, removed: 0, records_adopted: 0, zones: [] });
+    expect(run.body.pdns_version).toBe(run.body.db_version);
+    expect((await req("POST", "/admin/sync", { headers: { "X-Admin-Key": "nope" } })).status).toBe(401);
+  });
+});

@@ -196,11 +196,16 @@ otherwise the self-issued challenge cannot be validated.
 
 ## Operations
 
-- **Persistence** — certo's database (`database.connection`), PowerDNS' database and
-  config (`[pdns] dir`, default `data/pdns`), `acme_cache_dir` and any log file. Back up
-  the whole `data/` directory; it is git-ignored by design. A lost `data/pdns` is rebuilt
-  from certo's database only for the base zone and challenge records — hosted zone
-  contents, DNSSEC keys and TSIG keys are gone with it.
+- **Persistence** — certo's database (`database.connection`) is the only file that needs a
+  backup: every zone, record, DNSSEC key, TSIG key and allow list lives there and PowerDNS
+  is rebuilt from it at startup. `[pdns] dir` (default `data/pdns`) is disposable; deleting
+  `pdns.sqlite3` and restarting recreates every zone with the same DNSKEY/DS. Keep
+  `acme_cache_dir` (certificates) and any log file if you care about them; backing up the
+  whole `data/` directory (git-ignored by design) covers everything.
+- **DNS sync** — the admin area's Server tab shows the database version and the version
+  stamped on the PowerDNS zones (`GET /admin/sync`); "Sync DNS" (`POST /admin/sync`)
+  rebuilds every PowerDNS zone from the database and reports what changed. Use it after
+  touching PowerDNS by hand or when the two numbers differ.
 - **Sessions** — set `api.jwt_secret` explicitly, otherwise every restart invalidates all
   dashboard sessions.
 - **Admin API** — leave `api.admin_key` empty to keep `/admin/*` disabled.
@@ -213,30 +218,27 @@ otherwise the self-issued challenge cannot be validated.
   `lode-cli update` does it on demand; otherwise replace the binary. There is no automatic
   schema migration: the database must be at schema version 1 of this generation, anything
   else makes certo refuse to start (`unsupported database schema …`). Back up `certo.db`
-  and `data/pdns/pdns.sqlite3` before switching releases.
+  before switching releases.
 
-  Migrating a database of the previous generation (Rust releases with schema 4) by hand,
-  with certo stopped:
+  Migrating a database of the previous generation (Rust releases with schema 4, records
+  only in PowerDNS) by hand, with certo stopped:
 
   ```sh
   sqlite3 data/db/certo.db "UPDATE acmedns SET Value='1' WHERE Name='db_version';
-                            DELETE FROM zones WHERE user_id IS NULL;"
+                            DELETE FROM zones WHERE user_id IS NULL;
+                            ALTER TABLE zones ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+                            ALTER TABLE zones ADD COLUMN axfr_allow_from TEXT NOT NULL DEFAULT '[]';"
   ```
 
   The deleted rows are the base zone(s); certo re-creates the row for `general.domain` at
-  the next start. If `general.domain` was changed at some point, the PowerDNS zone of the
-  old base domain is still served and shadows every name below it (challenge records live in
-  `general.domain`): remove it from `data/pdns/pdns.sqlite3` as well, e.g. for `s.example.com`:
-
-  ```sh
-  sqlite3 data/pdns/pdns.sqlite3 "DELETE FROM records WHERE domain_id IN (SELECT id FROM domains WHERE name='s.example.com');
-                                  DELETE FROM domainmetadata WHERE domain_id IN (SELECT id FROM domains WHERE name='s.example.com');
-                                  DELETE FROM cryptokeys WHERE domain_id IN (SELECT id FROM domains WHERE name='s.example.com');
-                                  DELETE FROM domains WHERE name='s.example.com';"
-  ```
-
-  Also delete any NS record for `general.acme_domain` inside the base zone (admin area →
-  base zone → records): it turns the challenge names into a delegation. Databases of the Go
-  releases or of schema 3 (before PowerDNS) are not covered; start from a fresh database.
+  the next start and creates the zone data tables itself. The first start then **adopts**
+  the records, DNSSEC key and allow list of every PowerDNS zone the database knows (they
+  carry no version stamp yet) and **deletes** every PowerDNS zone it does not know — that
+  includes the zone of an old `general.domain` that shadowed the challenge names. TSIG keys
+  are not adopted: re-create them afterwards. Keep a copy of `data/pdns/pdns.sqlite3` until
+  the dashboard shows what you expect. Also delete any NS record for `general.acme_domain`
+  inside the base zone (admin area → base zone → records): it turns the challenge names
+  into a delegation. Databases of the Go releases or of schema 3 (before PowerDNS) are not
+  covered; start from a fresh database.
 - **Keys** — DNSSEC private keys and TSIG secrets live in PowerDNS' database under
   `[pdns] dir`; losing it means re-keying signed zones (new DS at the parent).

@@ -588,6 +588,17 @@
         "tokens": "Published tokens",
         "zones": "Hosted zones",
         "zonesDetail": "({{active}} active, {{pending}} pending)"
+      },
+      "sync": {
+        "title": "DNS sync",
+        "description": "certo's database is the source of truth; PowerDNS is rebuilt from it. The version counts every change to what is served.",
+        "dbVersion": "Database version",
+        "pdnsVersion": "PowerDNS version",
+        "inSync": "In sync",
+        "drift": "{{count}} zone(s) differ",
+        "zones": "Differences",
+        "run": "Sync DNS",
+        "done": "DNS synced: {{created}} created, {{removed}} removed, {{rrsets_changed}} record sets changed, {{keys_imported}} keys imported, {{records_adopted}} adopted, {{drift}} still differ"
       }
     }
   },

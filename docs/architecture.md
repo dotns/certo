@@ -27,9 +27,10 @@ data goes through the API.
    supervisor restarts PowerDNS with exponential backoff (max 30 s) when it exits; after 5
    exits within a minute certo itself exits non-zero so the outer supervisor restarts the
    whole tree.
-5. Build the `Zones` service (see
-   [Migrations](#migrations)), create the base zone when PowerDNS does not have it, and
-   reconcile every challenge TXT name from the `txt` table into it.
+5. Build the `Zones` service, create the base zone row on first start (seeded from
+   `general.records`) and run `Zones::sync` (see [Sync](#sync)): PowerDNS zones the
+   database does not serve are removed, active zones are created or converged from the
+   zone tables. A sync failure aborts the start.
 6. Start the HTTP server (plain, PEM files, or ACME via certo's own DNS) and the hourly
    delegation-check loop.
 7. Run until the HTTP server fails, PowerDNS crashes too often, or SIGINT/SIGTERM arrives;
@@ -106,18 +107,53 @@ and `loglevel` mapped from `logconfig.loglevel`. PowerDNS output is forwarded to
 log. Names outside every zone answer `REFUSED` (PowerDNS behaviour; the former server said
 `NXDOMAIN`).
 
+### Source of truth and sync
+
+certo's database holds every DNS fact: zone ownership and activation (`zones`), the
+rrsets of every zone (`zone_rrsets`), the DNSSEC signing key as PowerDNS exports it
+(`zone_dnssec`, private key in ISC format so a re-import keeps the DNSKEY and DS), TSIG
+keys with their secrets (`zone_tsig_keys`), the AXFR allow list (`zones.axfr_allow_from`)
+and the challenge TXT values (`txt`). PowerDNS is derived from it: a lost `pdns.sqlite3`
+is rebuilt completely at the next start.
+
+Every write goes to PowerDNS first (it validates the data) and is then stored in the same
+shape; reads of rrsets, DNSSEC state and transfer settings come from the database (the
+rrset list therefore has no SOA row — PowerDNS maintains the SOA). The DNSKEY and DS
+strings are the only values read back from PowerDNS.
+
+Each zone has a data `version` that moves in the same transaction as any change to what
+PowerDNS serves for it: rrsets, DNSSEC, TSIG keys, allow list, activation, and for the base
+zone every challenge TXT write. After every successful push certo stamps the PowerDNS zone
+with that version in the metadata kind `X-CERTO-VERSION`. `Zones::status` compares the two
+sides without changing anything (`GET /admin/sync`: sum of the versions of all active
+zones vs. sum of the stamps, plus the list of zones that differ).
+
+`Zones::sync` (startup; `POST /admin/sync` and the dashboard's "Sync DNS" button) brings
+PowerDNS in line: it deletes every PowerDNS zone that is not an active database zone,
+then for each active zone creates it when missing or converges it — one `PATCH` with the
+rrsets that differ (SOA and certo's own `_acme-challenge` TXT are left alone), the stored
+key imported when no key with the same content exists and other keys removed, NSEC3PARAM
+set, missing TSIG keys created with their stored secrets, both metadata kinds set, the
+packet cache flushed, the version stamped. A zone whose stamp equals its database version
+is skipped at startup; the admin endpoint forces every zone. Server-wide TSIG keys that no
+active zone references are deleted. A PowerDNS zone that exists but was never stamped is
+**adopted** first: its rrsets (minus SOA and TTL-1 challenge TXT), active key and allow
+list are taken into the database before converging — this is what carries a server from
+the previous generation over without losing records. TSIG keys are not adopted.
+
 ### Base zone
 
-`general.domain` is a PowerDNS zone like any other.
-`ensure_base_zone` creates it at first start with the apex NS (`general.nsname`) and the
-parsed `general.records` lines that fall inside it (others are logged as errors); an
-existing zone is left alone, so `general.records` is a first-start seed. The base zone row
-in `zones` has `user_id = NULL`; only admin routes see it (`system: true`), it is always
-exempt and cannot be deleted (`403 zone_not_allowed`).
+`general.domain` is a zone like any other, with `user_id = NULL` in `zones`;
+`ensure_base_zone` creates the row at first start with the apex NS (`general.nsname`) and
+the parsed `general.records` lines that fall inside it (others are logged as errors), so
+`general.records` is a first-start seed; later changes are made through the admin zone API.
+Only admin routes see the base zone (`system: true`), it is always exempt and cannot be
+deleted (`403 zone_not_allowed`).
 
 The challenge domain `general.acme_domain` (default: the zone itself) is a name inside that
 zone: challenge TXT rrsets `<subdomain>.<acme_domain>` are rrset writes on the base zone,
-as is `_acme-challenge.<domain>` for certo's own certificate. A typical layout serves
+derived from the `txt` table at sync time (never stored twice), as is
+`_acme-challenge.<domain>` for certo's own certificate. A typical layout serves
 `example.com` as the base zone with its ordinary A/MX records and keeps challenges under
 `s.example.com`, so the registrar delegation points at `example.com` only.
 `ZonePolicy { base_domain, base_zone, nsname }` carries the two names (`base_domain` is the
@@ -135,14 +171,18 @@ challenge domain); user zones may not be at or under `base_zone`.
   the zone, the type is in the allowed list (A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT;
   PTR only in `in-addr.arpa` / `ip6.arpa` zones), CNAME is not at the apex, and quotes plain
   TXT values; PowerDNS validates the rest and its message is surfaced as
-  `400 pdns_rejected`. The SOA is maintained by PowerDNS (`soa-edit-api`).
-- DNSSEC (opt-in): one `ecdsa256` CSK created through `cryptokeys`; NSEC3 is switched on
-  with `NSEC3PARAM` metadata (RFC 9276 parameters). `GET …/dnssec` returns the DNSKEY and
-  the DS records PowerDNS computes (one per digest type).
+  `400 pdns_rejected`. Accepted changes are stored in `zone_rrsets`. The SOA is
+  maintained by PowerDNS (`soa-edit-api`) and not part of the rrset list.
+- DNSSEC (opt-in): one `ecdsa256` CSK created through `cryptokeys`; its private key is
+  fetched (`GET …/cryptokeys/{id}`) and stored in `zone_dnssec` together with the NSEC
+  mode; NSEC3 is switched on with `NSEC3PARAM` metadata (RFC 9276 parameters).
+  `GET …/dnssec` returns the DNSKEY and the DS records PowerDNS computes (one per digest
+  type).
 - AXFR: `ALLOW-AXFR-FROM` metadata holds the allow list (CIDRs, normalized), `tsigkeys` +
-  `TSIG-ALLOW-AXFR` metadata hold the TSIG keys. A transfer is accepted when the source
-  address is allowed or the request is signed with one of the zone's keys. NOTIFY is not
-  sent.
+  `TSIG-ALLOW-AXFR` metadata hold the TSIG keys; both are stored (`zones.axfr_allow_from`,
+  `zone_tsig_keys` with the secret PowerDNS generated). A transfer is accepted when the
+  source address is allowed or the request is signed with one of the zone's keys. NOTIFY
+  is not sent.
 - After creating a zone certo flushes the PowerDNS packet cache for that name, because the
   cache would otherwise keep answering `REFUSED` for up to `cache-ttl` seconds.
 
@@ -155,15 +195,15 @@ Anyone may create a zone, but it is served only when the parent delegates it to 
 2. The check (`DnsDelegationChecker`) resolves the parent's nameservers through
    `[zones] resolver` (default: system resolver, fallback `1.1.1.1:53`), asks one of them
    non-recursively for `NS <zone>` and requires `general.nsname` in the referral.
-3. On success the zone is created in PowerDNS (restoring the rrset snapshot of a previous
-   activation, if any) with the apex NS and becomes `active`.
+3. On success the zone becomes `active` and is built in PowerDNS from the stored data
+   (the apex NS stored at creation, plus whatever was managed before a deactivation).
 4. Pending zones are re-checked hourly and on `POST …/verify` (one check per minute per
    zone, `429 check_rate_limited`; an inconclusive check answers `503 check_failed`). A
    pending zone nobody activates within 30 days is deleted.
 5. Active zones are re-checked daily. Only a definite "not delegated to us" answer counts
-   as a failure; after 7 consecutive failures the zone is deactivated: the PowerDNS zone is
-   deleted and its rrsets are kept in `zones.snapshot` so a later activation restores them.
-   This is what frees a name when a domain changes hands.
+   as a failure; after 7 consecutive failures the zone is deactivated: the PowerDNS zone
+   (and its TSIG keys) are deleted while the stored data stays, so a later activation
+   restores the zone as it was. This is what frees a name when a domain changes hands.
 6. Admin exemption (`PUT /admin/zones/{zone}/activation {"exempt": true}`) activates a zone
    without a check and skips re-checks; `false` returns it to the normal cycle.
 
@@ -228,12 +268,17 @@ api_keys(id, user_id, name, key_value UNIQUE,
          scope TEXT DEFAULT '["*"]', created_at)
 zones(id, user_id NULL for the base zone, name UNIQUE,
       active, exempt, verified_at, last_check, last_error,
-      failed_checks, snapshot TEXT, created_at)       -- ownership and activation state only
+      failed_checks, version, axfr_allow_from TEXT DEFAULT '[]',
+      created_at)                                     -- ownership, activation, data version
+zone_rrsets(zone_id, name, rtype, ttl, records TEXT,  -- records JSON list, name with trailing dot
+            PRIMARY KEY(zone_id, name, rtype))
+zone_dnssec(zone_id PRIMARY KEY, nsec3, algorithm, private_key)
+zone_tsig_keys(zone_id, name, algorithm, secret, PRIMARY KEY(zone_id, name))
 ```
 
-Everything DNS — rrsets, SOA serials, DNSSEC keys, TSIG keys, zone metadata — lives in
-PowerDNS' own SQLite database, `[pdns] dir/pdns.sqlite3`.
-
+PowerDNS' own SQLite database, `[pdns] dir/pdns.sqlite3`, is derived from these tables
+(see [Source of truth and sync](#source-of-truth-and-sync)) and holds only what PowerDNS
+needs at runtime (SOA serials, signatures, caches).
 Notes:
 
 - `txt.Domain` holds the full internal name (`<subdomain>.<base domain>`), lower-cased with
@@ -245,14 +290,17 @@ Notes:
   zones from PowerDNS, then deletes its `api_keys`, `user_domains`, the challenge TXT rows
   of those subdomains and its zone rows in one transaction, and finally unpublishes the
   affected TXT names; removing a domain does the same for that subdomain.
-- `zones.snapshot` is the JSON rrset list of a deactivated zone, restored on re-activation.
+- Deleting a zone removes its `zone_rrsets`, `zone_dnssec` and `zone_tsig_keys` rows in the
+  same transaction; an inactive zone keeps them for re-activation.
+- `zones.version` starts at 1 and is incremented with every change to what PowerDNS serves
+  for the zone; challenge TXT writes increment the base zone's version.
 
 **Credential storage.** Account passwords are bcrypt-hashed. **API keys are stored in
 plaintext** (`api_keys.key_value`) — this is required by the acme-dns HTTP storage backend,
 which must return the key as the acme-dns `password`, and by httpreq/acme-dns Basic-Auth
-echo. Treat both databases as secrets: restrict file permissions and use disk encryption,
-because a compromise exposes usable API keys (certo) and DNSSEC private keys and TSIG
-secrets (PowerDNS) directly. `admin_key` and `jwt_secret` live only in the config file. A
+echo. Treat the database as a secret: restrict file permissions and use disk encryption,
+because a compromise exposes usable API keys, DNSSEC private keys and TSIG secrets
+directly (`pdns.sqlite3` holds copies of the latter two). `admin_key` and `jwt_secret` live only in the config file. A
 TSIG secret is returned by the API only once, at creation.
 
 ### Migrations

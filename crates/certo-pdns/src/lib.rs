@@ -20,8 +20,8 @@ pub use names::{RrSetChange, parse_zone_name};
 pub use supervisor::Supervisor;
 pub use zones::{
     ACTIVE_RECHECK_INTERVAL, CheckReport, DnssecInfo, MAX_FAILED_CHECKS, NSEC_MODES,
-    PENDING_CHECK_INTERVAL, PENDING_EXPIRY, TSIG_ALGORITHMS, TransferInfo, TsigKeyInfo,
-    VERIFY_COOLDOWN, ZoneOpError, ZonePolicy, Zones,
+    PENDING_CHECK_INTERVAL, PENDING_EXPIRY, SyncReport, SyncStatus, TSIG_ALGORITHMS, TransferInfo,
+    TsigKeyInfo, VERIFY_COOLDOWN, VERSION_METADATA, ZoneOpError, ZonePolicy, ZoneVersions, Zones,
 };
 
 /// Errors from the supervisor and the API client.

@@ -1,14 +1,16 @@
-//! Zone service: ownership and activation in the certo database, DNS data in `PowerDNS`.
+//! Zone service: every DNS fact lives in the certo database; `PowerDNS` is derived from
+//! it and converged by [`Zones::sync`].
 
 use std::{sync::Arc, time::Duration};
 
-use certo_core::Zone;
+use certo_core::{Zone, ZoneDnssec, ZoneRrSet, ZoneTsigKey};
 use certo_db::{Db, DbError};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Serialize;
 use tracing::{error, info, warn};
 
 use crate::{
-    Client, Delegation, DelegationChecker, NewZone, PdnsError, RecordData, RrSet,
+    ChangeType, Client, Delegation, DelegationChecker, NewZone, PdnsError, RecordData, RrSet,
     names::{self, RrSetChange},
 };
 
@@ -33,6 +35,8 @@ const DNSSEC_ALGORITHM: &str = "ecdsa256";
 const CHALLENGE_TTL: u32 = 1;
 const ALLOW_AXFR_FROM: &str = "ALLOW-AXFR-FROM";
 const TSIG_ALLOW_AXFR: &str = "TSIG-ALLOW-AXFR";
+/// Zone metadata carrying the database version a `PowerDNS` zone was built from.
+pub const VERSION_METADATA: &str = "X-CERTO-VERSION";
 
 /// Server-wide zone rules.
 #[derive(Debug, Clone)]
@@ -90,6 +94,9 @@ impl From<DbError> for ZoneOpError {
             DbError::NotFound(what) => Self::NotFound(what),
             DbError::Conflict("zone") => Self::Exists,
             DbError::Conflict("zone overlap") => Self::NotAllowed("overlaps another user's zone"),
+            DbError::Conflict("tsig key") => {
+                invalid("tsig_key_exists", "a key with that name exists")
+            }
             other => Self::Db(other),
         }
     }
@@ -163,6 +170,54 @@ pub struct CheckReport {
     pub expired: usize,
 }
 
+/// Database and `PowerDNS` versions of one zone that differ.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ZoneVersions {
+    /// Zone name.
+    pub name: String,
+    /// Version in the database; `None` for a `PowerDNS` zone the database does not serve.
+    pub db: Option<i64>,
+    /// Version stamped on the `PowerDNS` zone; `None` when the zone or the stamp is missing.
+    pub pdns: Option<i64>,
+}
+
+/// How far `PowerDNS` is from the database.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct SyncStatus {
+    /// Sum of the versions of all active zones in the database.
+    pub db_version: i64,
+    /// Sum of the versions stamped on the `PowerDNS` zones.
+    pub pdns_version: i64,
+    /// Zones whose versions differ.
+    pub zones: Vec<ZoneVersions>,
+}
+
+/// What one [`Zones::sync`] run changed in `PowerDNS`.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct SyncReport {
+    /// Zones created in `PowerDNS`.
+    pub created: usize,
+    /// `PowerDNS` zones removed because the database does not serve them.
+    pub removed: usize,
+    /// Rrsets replaced or deleted.
+    pub rrsets_changed: usize,
+    /// DNSSEC keys imported from stored content.
+    pub keys_imported: usize,
+    /// Rrsets taken over from `PowerDNS` zones that were never stamped.
+    pub records_adopted: usize,
+    /// Versions after the run.
+    #[serde(flatten)]
+    pub status: SyncStatus,
+}
+
+/// What converging one zone changed.
+#[derive(Debug, Default)]
+struct Converged {
+    created: bool,
+    rrsets_changed: usize,
+    keys_imported: usize,
+}
+
 /// Zone operations shared by the HTTP API and the background checker.
 #[derive(Clone)]
 pub struct Zones {
@@ -207,19 +262,66 @@ fn parse_static(line: &str) -> Option<(String, u32, String, String)> {
     (!rdata.is_empty()).then_some((name, ttl, rtype, rdata))
 }
 
-/// Groups `(name, type, ttl, rdata)` tuples into REPLACE rrsets.
-fn group_rrsets(records: impl IntoIterator<Item = (String, u32, String, String)>) -> Vec<RrSet> {
+/// Groups `(name, ttl, type, rdata)` tuples into rrsets.
+fn group_rrsets(
+    records: impl IntoIterator<Item = (String, u32, String, String)>,
+) -> Vec<ZoneRrSet> {
     let mut order: Vec<(String, String)> = Vec::new();
-    let mut sets: FxHashMap<(String, String), RrSet> = FxHashMap::default();
+    let mut sets: FxHashMap<(String, String), ZoneRrSet> = FxHashMap::default();
     for (name, ttl, rtype, rdata) in records {
         let key = (apex(&name), rtype.clone());
         let set = sets.entry(key.clone()).or_insert_with(|| {
             order.push(key);
-            RrSet::replace(apex(&name), rtype, ttl, Vec::new())
+            ZoneRrSet {
+                name: apex(&name),
+                rtype,
+                ttl,
+                records: Vec::new(),
+            }
         });
-        set.records.push(RecordData::new(rdata));
+        set.records.push(rdata);
     }
     order.into_iter().filter_map(|k| sets.remove(&k)).collect()
+}
+
+/// A stored rrset as a `REPLACE` change (`DELETE` when it has no records).
+fn to_change(rr: &ZoneRrSet) -> RrSet {
+    if rr.records.is_empty() {
+        RrSet::delete(rr.name.clone(), rr.rtype.clone())
+    } else {
+        RrSet::replace(
+            rr.name.clone(),
+            rr.rtype.clone(),
+            rr.ttl,
+            rr.records.iter().map(RecordData::new).collect(),
+        )
+    }
+}
+
+/// A `PowerDNS` rrset (or change) as stored data.
+fn to_stored(rr: &RrSet) -> ZoneRrSet {
+    ZoneRrSet {
+        name: rr.name.clone(),
+        rtype: rr.rtype.clone(),
+        ttl: rr.ttl,
+        records: if rr.changetype == Some(ChangeType::Delete) {
+            Vec::new()
+        } else {
+            rr.records.iter().map(|r| r.content.clone()).collect()
+        },
+    }
+}
+
+fn same_records(a: &RrSet, b: &RrSet) -> bool {
+    let mut x: Vec<&str> = a.records.iter().map(|r| r.content.as_str()).collect();
+    let mut y: Vec<&str> = b.records.iter().map(|r| r.content.as_str()).collect();
+    x.sort_unstable();
+    y.sort_unstable();
+    a.ttl == b.ttl && x == y
+}
+
+fn parse_version(values: &[String]) -> Option<i64> {
+    values.first().and_then(|v| v.trim().parse().ok())
 }
 
 impl Zones {
@@ -253,27 +355,31 @@ impl Zones {
         self.client.ping().await
     }
 
+    /// Writes the version a `PowerDNS` zone was built from.
+    async fn stamp(&self, name: &str, version: i64) -> Result<(), ZoneOpError> {
+        self.client
+            .set_metadata(name, VERSION_METADATA, vec![version.to_string()])
+            .await?;
+        Ok(())
+    }
+
     // --- Base zone and challenge TXT ---
 
-    /// Creates the server's own zone on first start, seeded from the config record lines;
-    /// an existing zone is left untouched.
+    /// Creates the server's own zone row on first start, seeded from the config record
+    /// lines; an existing row is left untouched.
     pub async fn ensure_base_zone(&self, seed: &[String]) -> Result<(), ZoneOpError> {
         let base = &self.policy.base_zone;
         match self.db.zone(base).await {
-            Ok(_) => {}
-            Err(DbError::NotFound(_)) => {
-                let zone = self.db.create_zone(None, base).await?;
-                self.db.activate_zone(zone.id, true).await?;
+            Ok(_) => {
+                if !seed.is_empty() {
+                    info!(
+                        "general.records was imported into the base zone; it can be removed from the config"
+                    );
+                }
+                return Ok(());
             }
+            Err(DbError::NotFound(_)) => {}
             Err(e) => return Err(e.into()),
-        }
-        if self.client.zone(base).await?.is_some() {
-            if !seed.is_empty() {
-                info!(
-                    "general.records was imported into the base zone; it can be removed from the config"
-                );
-            }
-            return Ok(());
         }
         let mut records = Vec::new();
         for line in seed {
@@ -295,10 +401,9 @@ impl Zones {
         }
         let rrsets = group_rrsets(records);
         info!(zone = %base, rrsets = rrsets.len(), "creating the base zone");
-        self.client
-            .create_zone(&NewZone::native(apex(base), Vec::new(), rrsets))
-            .await?;
-        self.client.flush_cache(base).await?;
+        let zone = self.db.create_zone(None, base).await?;
+        self.db.replace_zone_rrsets(zone.id, &rrsets).await?;
+        self.db.activate_zone(zone.id, true).await?;
         Ok(())
     }
 
@@ -318,6 +423,10 @@ impl Zones {
         }
     }
 
+    fn own_challenge_name(&self) -> String {
+        format!("_acme-challenge.{}.", self.policy.base_zone)
+    }
+
     /// Pushes the current TXT values of one challenge name into the base zone.
     pub async fn sync_txt(&self, name: &str) -> Result<(), ZoneOpError> {
         let name = name.trim_end_matches('.').to_ascii_lowercase();
@@ -334,42 +443,12 @@ impl Zones {
                 &[Self::challenge_rrset(&name, &values)],
             )
             .await?;
-        Ok(())
-    }
-
-    /// Makes the base zone's challenge TXT rrsets match the database (startup).
-    pub async fn reconcile_txt(&self) -> Result<usize, ZoneOpError> {
-        let base = &self.policy.base_zone;
-        let own = format!("_acme-challenge.{}.", self.policy.base_zone);
-        let served = self
-            .client
-            .zone(base)
-            .await?
-            .ok_or(ZoneOpError::NotFound("zone"))?
-            .rrsets;
-        let wanted = self.db.txt_by_domain().await?;
-        let mut changes: Vec<RrSet> = wanted
-            .iter()
-            .map(|(name, values)| Self::challenge_rrset(name, values))
-            .collect();
-        for rr in served {
-            let stale = rr.rtype == "TXT"
-                && rr.ttl == CHALLENGE_TTL
-                && rr.name != own
-                && !wanted.iter().any(|(n, _)| apex(n) == rr.name);
-            if stale {
-                changes.push(RrSet::delete(rr.name, "TXT"));
-            }
-        }
-        let n = changes.len();
-        if n > 0 {
-            self.client.patch_rrsets(base, &changes).await?;
-        }
-        Ok(n)
+        let base = self.db.zone(&self.policy.base_zone).await?;
+        self.stamp(&base.name, base.version).await
     }
 
     /// Sets (or clears) the DNS-01 token for certo's own certificate, issued for the
-    /// base zone name.
+    /// base zone name. Not stored: the token is short-lived and re-issued on demand.
     pub async fn set_own_challenge(&self, value: Option<&str>) -> Result<(), ZoneOpError> {
         let name = format!("_acme-challenge.{}", self.policy.base_zone);
         let values: Vec<String> = value.map(str::to_owned).into_iter().collect();
@@ -382,9 +461,332 @@ impl Zones {
         Ok(())
     }
 
+    // --- Sync ---
+
+    /// Everything `PowerDNS` should serve for a zone: the stored rrsets, an apex NS when
+    /// none is stored, and for the base zone the challenge TXT values.
+    async fn desired_rrsets(&self, zone: &Zone) -> Result<Vec<RrSet>, ZoneOpError> {
+        let apex_name = apex(&zone.name);
+        let mut desired: Vec<RrSet> = self
+            .db
+            .zone_rrsets(zone.id)
+            .await?
+            .iter()
+            .map(to_change)
+            .collect();
+        if !desired
+            .iter()
+            .any(|rr| rr.rtype == "NS" && rr.name == apex_name)
+        {
+            desired.push(RrSet::replace(
+                apex_name,
+                "NS",
+                names::DEFAULT_TTL,
+                vec![RecordData::new(apex(&self.policy.nsname))],
+            ));
+        }
+        if zone.is_system() {
+            let challenges: Vec<RrSet> = self
+                .db
+                .txt_by_domain()
+                .await?
+                .iter()
+                .filter(|(name, _)| names::inside(name, &zone.name))
+                .map(|(name, values)| Self::challenge_rrset(name, values))
+                .collect();
+            desired
+                .retain(|rr| !(rr.rtype == "TXT" && challenges.iter().any(|c| c.name == rr.name)));
+            desired.extend(challenges);
+        }
+        Ok(desired)
+    }
+
+    /// Rrsets `PowerDNS` maintains itself or that are pushed outside the database.
+    fn is_protected(&self, zone: &Zone, rr: &RrSet) -> bool {
+        rr.rtype == "SOA"
+            || (zone.is_system() && rr.rtype == "TXT" && rr.name == self.own_challenge_name())
+    }
+
+    /// Creates the `PowerDNS` zone or patches its rrsets to match `desired`.
+    async fn converge_rrsets(
+        &self,
+        zone: &Zone,
+        served: Option<&crate::Zone>,
+        desired: Vec<RrSet>,
+    ) -> Result<Converged, ZoneOpError> {
+        let mut out = Converged::default();
+        let Some(z) = served else {
+            info!(zone = %zone.name, rrsets = desired.len(), "creating zone in pdns");
+            out.rrsets_changed = desired.len();
+            self.client
+                .create_zone(&NewZone::native(apex(&zone.name), Vec::new(), desired))
+                .await?;
+            out.created = true;
+            return Ok(out);
+        };
+        let mut changes: Vec<RrSet> = desired
+            .iter()
+            .filter(|d| {
+                !z.rrsets
+                    .iter()
+                    .any(|s| s.name == d.name && s.rtype == d.rtype && same_records(s, d))
+            })
+            .cloned()
+            .collect();
+        for s in &z.rrsets {
+            let wanted = desired
+                .iter()
+                .any(|d| d.name == s.name && d.rtype == s.rtype);
+            if !wanted && !self.is_protected(zone, s) {
+                changes.push(RrSet::delete(s.name.clone(), s.rtype.clone()));
+            }
+        }
+        if !changes.is_empty() {
+            info!(zone = %zone.name, rrsets = changes.len(), "converging zone records");
+            self.client.patch_rrsets(&zone.name, &changes).await?;
+            out.rrsets_changed = changes.len();
+        }
+        Ok(out)
+    }
+
+    /// Keeps the key whose content is stored, drops every other one, imports a missing
+    /// one and sets the NSEC mode; returns the number of keys imported.
+    async fn converge_dnssec(
+        &self,
+        zone: &Zone,
+        served: Option<&crate::Zone>,
+    ) -> Result<usize, ZoneOpError> {
+        let stored = self.db.zone_dnssec(zone.id).await?;
+        let mut kept = false;
+        for key in self.client.cryptokeys(&zone.name).await? {
+            let full = self.client.cryptokey(&zone.name, key.id).await?;
+            let matches = stored
+                .as_ref()
+                .is_some_and(|s| s.private_key == full.privatekey);
+            if matches && !kept {
+                kept = true;
+            } else {
+                self.client.delete_cryptokey(&zone.name, key.id).await?;
+            }
+        }
+        let imported = if let Some(s) = stored.as_ref().filter(|_| !kept) {
+            info!(zone = %zone.name, "importing the stored DNSSEC key");
+            self.client.import_csk(&zone.name, &s.private_key).await?;
+            1
+        } else {
+            0
+        };
+        let want_nsec3 = stored.as_ref().is_some_and(|s| s.nsec3);
+        let has_nsec3 = served.is_some_and(|z| !z.nsec3param.is_empty());
+        if want_nsec3 != has_nsec3 {
+            self.client
+                .set_nsec3param(&zone.name, want_nsec3.then_some(NSEC3_PARAM))
+                .await?;
+        }
+        Ok(imported)
+    }
+
+    /// Creates missing TSIG keys (server-wide in pdns) and sets both transfer metadata kinds.
+    async fn converge_transfers(&self, zone: &Zone) -> Result<(), ZoneOpError> {
+        let tsig = self.db.zone_tsig_keys(zone.id).await?;
+        let present = self.client.tsig_keys().await?;
+        for key in &tsig {
+            if !present
+                .iter()
+                .any(|p| p.name.trim_end_matches('.') == key.name)
+            {
+                self.client
+                    .create_tsig_key(&crate::TsigKey {
+                        id: String::new(),
+                        name: key.name.clone(),
+                        algorithm: key.algorithm.clone(),
+                        key: key.secret.clone(),
+                    })
+                    .await?;
+            }
+        }
+        self.client
+            .set_metadata(
+                &zone.name,
+                TSIG_ALLOW_AXFR,
+                tsig.iter().map(|k| k.name.clone()).collect(),
+            )
+            .await?;
+        self.client
+            .set_metadata(&zone.name, ALLOW_AXFR_FROM, zone.axfr_allow_from.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Makes the `PowerDNS` zone equal to the database and stamps it with the version.
+    async fn converge(&self, zone: &Zone) -> Result<Converged, ZoneOpError> {
+        let desired = self.desired_rrsets(zone).await?;
+        let served = self.client.zone(&zone.name).await?;
+        let mut out = self.converge_rrsets(zone, served.as_ref(), desired).await?;
+        out.keys_imported = self.converge_dnssec(zone, served.as_ref()).await?;
+        self.converge_transfers(zone).await?;
+        self.stamp(&zone.name, zone.version).await?;
+        if out.created || out.rrsets_changed > 0 {
+            self.client.flush_cache(&zone.name).await?;
+        }
+        Ok(out)
+    }
+
+    /// Takes the records, key and allow list of a `PowerDNS` zone that predates the
+    /// version stamps into the database; returns the number of rrsets adopted.
+    async fn adopt(&self, zone: &Zone, served: &crate::Zone) -> Result<usize, ZoneOpError> {
+        let rrsets: Vec<ZoneRrSet> = served
+            .rrsets
+            .iter()
+            .filter(|rr| {
+                let challenge = zone.is_system() && rr.rtype == "TXT" && rr.ttl == CHALLENGE_TTL;
+                !self.is_protected(zone, rr) && !challenge
+            })
+            .map(to_stored)
+            .collect();
+        warn!(zone = %zone.name, rrsets = rrsets.len(), "adopting records from an unstamped pdns zone");
+        self.db.replace_zone_rrsets(zone.id, &rrsets).await?;
+        let active_key = if self.db.zone_dnssec(zone.id).await?.is_none() {
+            self.client
+                .cryptokeys(&zone.name)
+                .await?
+                .into_iter()
+                .find(|k| k.active)
+        } else {
+            None
+        };
+        if let Some(key) = active_key {
+            let full = self.client.cryptokey(&zone.name, key.id).await?;
+            self.db
+                .set_zone_dnssec(
+                    zone.id,
+                    Some(&ZoneDnssec {
+                        nsec3: !served.nsec3param.is_empty(),
+                        algorithm: full.algorithm,
+                        private_key: full.privatekey,
+                    }),
+                )
+                .await?;
+        }
+        if zone.axfr_allow_from.is_empty() {
+            let allow = self.client.metadata(&zone.name, ALLOW_AXFR_FROM).await?;
+            if !allow.is_empty() {
+                self.db.set_zone_axfr_allow_from(zone.id, &allow).await?;
+            }
+        }
+        Ok(rrsets.len())
+    }
+
+    /// Removes the given TSIG keys from pdns (unknown ones are ignored).
+    async fn remove_pdns_tsig_keys(&self, names: &[String]) -> Result<(), ZoneOpError> {
+        if names.is_empty() {
+            return Ok(());
+        }
+        for key in self.client.tsig_keys().await? {
+            if names.iter().any(|n| n == key.name.trim_end_matches('.')) {
+                self.client.delete_tsig_key(&key.id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Brings `PowerDNS` in line with the database: zones it should not serve are removed,
+    /// active zones are created or converged. Zones whose stamped version equals the
+    /// database version are skipped unless `force` is set; a zone that was never stamped
+    /// is adopted first.
+    pub async fn sync(&self, force: bool) -> Result<SyncReport, ZoneOpError> {
+        let mut report = SyncReport::default();
+        let zones = self.db.zones(None).await?;
+        let served = self.client.zones().await?;
+        let active: FxHashSet<String> = zones
+            .iter()
+            .filter(|z| z.active)
+            .map(|z| apex(&z.name))
+            .collect();
+        for summary in &served {
+            if !active.contains(&summary.name) {
+                warn!(zone = %summary.name, "removing pdns zone the database does not serve");
+                self.client.delete_zone(&summary.name).await?;
+                report.removed += 1;
+            }
+        }
+        let mut wanted_tsig: FxHashSet<String> = FxHashSet::default();
+        for zone in zones.iter().filter(|z| z.active) {
+            for key in self.db.zone_tsig_keys(zone.id).await? {
+                wanted_tsig.insert(key.name);
+            }
+            let exists = served.iter().any(|s| s.name == apex(&zone.name));
+            let stamped = if exists {
+                parse_version(&self.client.metadata(&zone.name, VERSION_METADATA).await?)
+            } else {
+                None
+            };
+            let mut zone = zone.clone();
+            if exists && stamped.is_none() {
+                if let Some(current) = self.client.zone(&zone.name).await? {
+                    report.records_adopted += self.adopt(&zone, &current).await?;
+                    zone = self.db.zone(&zone.name).await?;
+                }
+            } else if !force && stamped == Some(zone.version) {
+                continue;
+            }
+            let done = self.converge(&zone).await?;
+            report.created += usize::from(done.created);
+            report.rrsets_changed += done.rrsets_changed;
+            report.keys_imported += done.keys_imported;
+        }
+        for key in self.client.tsig_keys().await? {
+            if !wanted_tsig.contains(key.name.trim_end_matches('.')) {
+                self.client.delete_tsig_key(&key.id).await?;
+            }
+        }
+        report.status = self.status().await?;
+        Ok(report)
+    }
+
+    /// Compares the database with `PowerDNS` without changing anything.
+    pub async fn status(&self) -> Result<SyncStatus, ZoneOpError> {
+        let mut status = SyncStatus::default();
+        let zones = self.db.zones(None).await?;
+        let served = self.client.zones().await?;
+        let mut seen: FxHashSet<String> = FxHashSet::default();
+        for zone in zones.iter().filter(|z| z.active) {
+            seen.insert(apex(&zone.name));
+            status.db_version += zone.version;
+            let pdns = if served.iter().any(|s| s.name == apex(&zone.name)) {
+                parse_version(&self.client.metadata(&zone.name, VERSION_METADATA).await?)
+            } else {
+                None
+            };
+            status.pdns_version += pdns.unwrap_or(0);
+            if pdns != Some(zone.version) {
+                status.zones.push(ZoneVersions {
+                    name: zone.name.clone(),
+                    db: Some(zone.version),
+                    pdns,
+                });
+            }
+        }
+        for summary in served.iter().filter(|s| !seen.contains(&s.name)) {
+            let pdns = parse_version(
+                &self
+                    .client
+                    .metadata(&summary.name, VERSION_METADATA)
+                    .await?,
+            );
+            status.pdns_version += pdns.unwrap_or(0);
+            status.zones.push(ZoneVersions {
+                name: summary.name.trim_end_matches('.').to_owned(),
+                db: None,
+                pdns,
+            });
+        }
+        Ok(status)
+    }
+
     // --- Zone lifecycle ---
 
-    /// Creates a pending zone and runs its first delegation check.
+    /// Creates a pending zone (with its apex NS) and runs its first delegation check.
     pub async fn create(&self, user_id: Option<i64>, name: &str) -> Result<Zone, ZoneOpError> {
         let name = names::parse_zone_name(name)?;
         if names::inside(&name, &self.policy.base_zone) {
@@ -394,6 +796,18 @@ impl Zones {
             return Err(ZoneOpError::NotAllowed("a public suffix cannot be a zone"));
         }
         let zone = self.db.create_zone(user_id, &name).await?;
+        self.db
+            .apply_zone_rrsets(
+                zone.id,
+                &[ZoneRrSet {
+                    name: apex(&name),
+                    rtype: "NS".to_owned(),
+                    ttl: names::DEFAULT_TTL,
+                    records: vec![apex(&self.policy.nsname)],
+                }],
+            )
+            .await?;
+        let zone = self.db.zone(&name).await?;
         match self.run_check(&zone).await {
             Ok(updated) => Ok(updated),
             Err(e) => {
@@ -444,49 +858,31 @@ impl Zones {
         }
     }
 
-    /// Creates the zone in `PowerDNS` (restoring a snapshot if one exists) and marks it active.
+    /// Marks a zone active and builds it in `PowerDNS` from the stored data.
     async fn activate(&self, zone: &Zone, exempt: bool) -> Result<Zone, ZoneOpError> {
-        if self.client.zone(&zone.name).await?.is_none() {
-            let snapshot: Option<Vec<RrSet>> = self
-                .db
-                .zone_snapshot(zone.id)
-                .await?
-                .and_then(|s| serde_json::from_str(&s).ok());
-            let new = match snapshot {
-                Some(rrsets) if !rrsets.is_empty() => {
-                    NewZone::native(apex(&zone.name), Vec::new(), rrsets)
-                }
-                _ => NewZone::native(
-                    apex(&zone.name),
-                    vec![apex(&self.policy.nsname)],
-                    Vec::new(),
-                ),
-            };
-            self.client.create_zone(&new).await?;
-            self.client.flush_cache(&zone.name).await?;
+        let updated = self.db.activate_zone(zone.id, exempt).await?;
+        if !zone.active || self.client.zone(&zone.name).await?.is_none() {
+            self.converge(&updated).await?;
         }
-        Ok(self.db.activate_zone(zone.id, exempt).await?)
+        Ok(updated)
     }
 
-    /// Removes the zone from `PowerDNS`, keeping its records for a later re-activation.
+    /// Removes the zone from `PowerDNS`; its data stays for a later re-activation.
     async fn deactivate(&self, zone: &Zone) -> Result<Zone, ZoneOpError> {
-        let rrsets: Vec<RrSet> = self
-            .client
-            .zone(&zone.name)
-            .await?
-            .map(|z| {
-                z.rrsets
-                    .into_iter()
-                    .map(|mut rr| {
-                        rr.changetype = None;
-                        rr
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let snapshot = serde_json::to_string(&rrsets).unwrap_or_else(|_| "[]".to_owned());
+        self.remove_from_pdns(zone).await?;
+        Ok(self.db.deactivate_zone(zone.id).await?)
+    }
+
+    async fn remove_from_pdns(&self, zone: &Zone) -> Result<(), ZoneOpError> {
         self.client.delete_zone(&zone.name).await?;
-        Ok(self.db.deactivate_zone(zone.id, &snapshot).await?)
+        let names: Vec<String> = self
+            .db
+            .zone_tsig_keys(zone.id)
+            .await?
+            .into_iter()
+            .map(|k| k.name)
+            .collect();
+        self.remove_pdns_tsig_keys(&names).await
     }
 
     /// Admin exemption: `true` activates without a check and stops re-checks; `false`
@@ -509,7 +905,7 @@ impl Zones {
         if zone.is_system() {
             return Err(ZoneOpError::NotAllowed("the base zone cannot be deleted"));
         }
-        self.client.delete_zone(&zone.name).await?;
+        self.remove_from_pdns(zone).await?;
         self.db.delete_zone(zone.id).await?;
         Ok(())
     }
@@ -517,7 +913,7 @@ impl Zones {
     /// Removes a user's zones from `PowerDNS` (the rows go with the user).
     pub async fn remove_user_zones(&self, user_id: i64) -> Result<(), ZoneOpError> {
         for zone in self.db.zones(Some(user_id)).await? {
-            self.client.delete_zone(&zone.name).await?;
+            self.remove_from_pdns(&zone).await?;
         }
         Ok(())
     }
@@ -532,23 +928,23 @@ impl Zones {
 
     // --- Records ---
 
-    /// All rrsets of an active zone.
+    /// All stored rrsets of an active zone, ordered by name and type.
     pub async fn rrsets(&self, zone: &Zone) -> Result<Vec<RrSet>, ZoneOpError> {
         Self::require_active(zone)?;
-        let mut rrsets = self
-            .client
-            .zone(&zone.name)
+        Ok(self
+            .db
+            .zone_rrsets(zone.id)
             .await?
-            .ok_or(ZoneOpError::NotFound("zone"))?
-            .rrsets;
-        for rr in &mut rrsets {
-            rr.changetype = None;
-        }
-        rrsets.sort_by(|a, b| (&a.name, &a.rtype).cmp(&(&b.name, &b.rtype)));
-        Ok(rrsets)
+            .iter()
+            .map(|rr| RrSet {
+                changetype: None,
+                ..to_change(rr)
+            })
+            .collect())
     }
 
-    /// Applies validated rrset changes to an active zone.
+    /// Applies validated rrset changes to an active zone: `PowerDNS` checks them first,
+    /// then they are stored.
     pub async fn patch_rrsets(
         &self,
         zone: &Zone,
@@ -557,24 +953,29 @@ impl Zones {
         Self::require_active(zone)?;
         let rrsets = names::validate_changes(&zone.name, changes)?;
         self.client.patch_rrsets(&zone.name, &rrsets).await?;
-        Ok(())
+        let stored: Vec<ZoneRrSet> = rrsets.iter().map(to_stored).collect();
+        let version = self.db.apply_zone_rrsets(zone.id, &stored).await?;
+        self.stamp(&zone.name, version).await
     }
 
     // --- DNSSEC ---
 
-    /// DNSSEC state of an active zone.
+    /// DNSSEC state of an active zone; the DNSKEY and DS come from `PowerDNS`.
     pub async fn dnssec(&self, zone: &Zone) -> Result<DnssecInfo, ZoneOpError> {
         Self::require_active(zone)?;
+        let Some(stored) = self.db.zone_dnssec(zone.id).await? else {
+            return Ok(DnssecInfo {
+                enabled: false,
+                nsec_mode: "nsec".to_owned(),
+                dnskey: None,
+                ds: Vec::new(),
+            });
+        };
         let keys = self.client.cryptokeys(&zone.name).await?;
-        let nsec3 = self
-            .client
-            .zone(&zone.name)
-            .await?
-            .is_some_and(|z| !z.nsec3param.is_empty());
         let key = keys.iter().find(|k| k.active);
         Ok(DnssecInfo {
-            enabled: key.is_some(),
-            nsec_mode: if nsec3 { "nsec3" } else { "nsec" }.to_owned(),
+            enabled: true,
+            nsec_mode: if stored.nsec3 { "nsec3" } else { "nsec" }.to_owned(),
             dnskey: key.map(|k| k.dnskey.clone()).filter(|d| !d.is_empty()),
             ds: key.map(|k| k.ds.clone()).unwrap_or_default(),
         })
@@ -595,19 +996,33 @@ impl Zones {
             ));
         }
         let keys = self.client.cryptokeys(&zone.name).await?;
-        if enabled {
-            if !keys.iter().any(|k| k.active) {
-                self.client.add_csk(&zone.name, DNSSEC_ALGORITHM).await?;
-            }
+        let version = if enabled {
+            let key = match keys.into_iter().find(|k| k.active) {
+                Some(k) => k,
+                None => self.client.add_csk(&zone.name, DNSSEC_ALGORITHM).await?,
+            };
             self.client
                 .set_nsec3param(&zone.name, (nsec_mode == "nsec3").then_some(NSEC3_PARAM))
                 .await?;
+            let full = self.client.cryptokey(&zone.name, key.id).await?;
+            self.db
+                .set_zone_dnssec(
+                    zone.id,
+                    Some(&ZoneDnssec {
+                        nsec3: nsec_mode == "nsec3",
+                        algorithm: full.algorithm,
+                        private_key: full.privatekey,
+                    }),
+                )
+                .await?
         } else {
             for key in keys {
                 self.client.delete_cryptokey(&zone.name, key.id).await?;
             }
             self.client.set_nsec3param(&zone.name, None).await?;
-        }
+            self.db.set_zone_dnssec(zone.id, None).await?
+        };
+        self.stamp(&zone.name, version).await?;
         self.dnssec(zone).await
     }
 
@@ -616,22 +1031,19 @@ impl Zones {
     /// Transfer settings of an active zone.
     pub async fn transfer(&self, zone: &Zone) -> Result<TransferInfo, ZoneOpError> {
         Self::require_active(zone)?;
-        let allow_from = self.client.metadata(&zone.name, ALLOW_AXFR_FROM).await?;
-        let names = self.client.metadata(&zone.name, TSIG_ALLOW_AXFR).await?;
-        let all = self.client.tsig_keys().await?;
-        let tsig_keys = names
-            .iter()
-            .map(|n| TsigKeyInfo {
-                name: n.clone(),
-                algorithm: all
-                    .iter()
-                    .find(|k| k.name.trim_end_matches('.') == n.trim_end_matches('.'))
-                    .map(|k| k.algorithm.clone())
-                    .unwrap_or_default(),
+        let current = self.db.zone(&zone.name).await?;
+        let tsig_keys = self
+            .db
+            .zone_tsig_keys(zone.id)
+            .await?
+            .into_iter()
+            .map(|k| TsigKeyInfo {
+                name: k.name,
+                algorithm: k.algorithm,
             })
             .collect();
         Ok(TransferInfo {
-            allow_from,
+            allow_from: current.axfr_allow_from,
             tsig_keys,
         })
     }
@@ -655,8 +1067,10 @@ impl Zones {
             nets.push(net.trunc().to_string());
         }
         self.client
-            .set_metadata(&zone.name, ALLOW_AXFR_FROM, nets)
+            .set_metadata(&zone.name, ALLOW_AXFR_FROM, nets.clone())
             .await?;
+        let version = self.db.set_zone_axfr_allow_from(zone.id, &nets).await?;
+        self.stamp(&zone.name, version).await?;
         self.transfer(zone).await
     }
 
@@ -672,8 +1086,8 @@ impl Zones {
         if !TSIG_ALGORITHMS.contains(&algorithm) {
             return Err(invalid("invalid_algorithm", "unsupported TSIG algorithm"));
         }
-        let mut allowed = self.client.metadata(&zone.name, TSIG_ALLOW_AXFR).await?;
-        if allowed.iter().any(|n| n.trim_end_matches('.') == name) {
+        let existing = self.db.zone_tsig_keys(zone.id).await?;
+        if existing.iter().any(|k| k.name == name) {
             return Err(invalid("tsig_key_exists", "a key with that name exists"));
         }
         let created = match self
@@ -692,10 +1106,23 @@ impl Zones {
             }
             Err(e) => return Err(e.into()),
         };
+        let version = self
+            .db
+            .add_zone_tsig_key(
+                zone.id,
+                &ZoneTsigKey {
+                    name: name.clone(),
+                    algorithm: created.algorithm.clone(),
+                    secret: created.key.clone(),
+                },
+            )
+            .await?;
+        let mut allowed: Vec<String> = existing.into_iter().map(|k| k.name).collect();
         allowed.push(name.clone());
         self.client
             .set_metadata(&zone.name, TSIG_ALLOW_AXFR, allowed)
             .await?;
+        self.stamp(&zone.name, version).await?;
         Ok((
             TsigKeyInfo {
                 name,
@@ -709,27 +1136,20 @@ impl Zones {
     pub async fn delete_tsig_key(&self, zone: &Zone, name: &str) -> Result<(), ZoneOpError> {
         Self::require_active(zone)?;
         let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
-        let allowed = self.client.metadata(&zone.name, TSIG_ALLOW_AXFR).await?;
-        if !allowed.iter().any(|n| n.trim_end_matches('.') == name) {
-            return Err(ZoneOpError::NotFound("tsig key"));
-        }
-        let remaining = allowed
+        let version = self.db.delete_zone_tsig_key(zone.id, &name).await?;
+        let remaining = self
+            .db
+            .zone_tsig_keys(zone.id)
+            .await?
             .into_iter()
-            .filter(|n| n.trim_end_matches('.') != name)
+            .map(|k| k.name)
             .collect();
         self.client
             .set_metadata(&zone.name, TSIG_ALLOW_AXFR, remaining)
             .await?;
-        if let Some(key) = self
-            .client
-            .tsig_keys()
-            .await?
-            .into_iter()
-            .find(|k| k.name.trim_end_matches('.') == name)
-        {
-            self.client.delete_tsig_key(&key.id).await?;
-        }
-        Ok(())
+        self.remove_pdns_tsig_keys(std::slice::from_ref(&name))
+            .await?;
+        self.stamp(&zone.name, version).await
     }
 
     // --- Background work ---
@@ -811,7 +1231,7 @@ mod tests {
         ]);
         assert_eq!(rrsets.len(), 2);
         assert_eq!(rrsets[0].rtype, "A");
-        assert_eq!(rrsets[0].records.len(), 2);
+        assert_eq!(rrsets[0].records, ["192.0.2.1", "192.0.2.2"]);
         assert_eq!(rrsets[1].name, "a.test.");
     }
 

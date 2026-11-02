@@ -85,11 +85,16 @@ async fn start_zones(config: &Config, db: Db) -> anyhow::Result<(Supervisor, Zon
         .ensure_base_zone(&config.general.records)
         .await
         .context("cannot set up the base zone")?;
-    let synced = zones
-        .reconcile_txt()
-        .await
-        .context("challenge TXT reconciliation failed")?;
-    info!(names = synced, "challenge records reconciled");
+    let report = zones.sync(false).await.context("dns sync failed")?;
+    info!(
+        created = report.created,
+        removed = report.removed,
+        rrsets = report.rrsets_changed,
+        keys = report.keys_imported,
+        adopted = report.records_adopted,
+        version = report.status.db_version,
+        "dns synced"
+    );
     Ok((supervisor, zones))
 }
 

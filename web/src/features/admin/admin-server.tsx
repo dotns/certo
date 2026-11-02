@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useInfoQuery } from '@/features/info/hooks'
 import { useZonesQuery } from '@/features/zones/hooks'
 import { CopyButton } from '@/shared/components/copy-button'
@@ -8,7 +9,7 @@ import { Loading } from '@/shared/components/loading'
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card'
-import { useAdminDomainsQuery, useAdminRecordsQuery, useAdminUsersQuery } from './hooks'
+import { useAdminDomainsQuery, useAdminRecordsQuery, useAdminUsersQuery, useSyncMutation, useSyncStatusQuery } from './hooks'
 
 export function AdminServer() {
   const { t } = useTranslation()
@@ -17,7 +18,10 @@ export function AdminServer() {
   const domains = useAdminDomainsQuery()
   const records = useAdminRecordsQuery()
   const zones = useZonesQuery('admin')
+  const sync = useSyncStatusQuery()
+  const runSync = useSyncMutation()
   const count = (n: number | undefined) => (n === undefined ? '…' : String(n))
+  const drift = sync.data ? sync.data.zones.length > 0 : false
 
   return (
     <div className="grid gap-6 pt-2 lg:grid-cols-2">
@@ -72,6 +76,45 @@ export function AdminServer() {
               )}
             </dd>
           </dl>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('admin.server.sync.title')}</CardTitle>
+          <CardDescription>{t('admin.server.sync.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <ErrorAlert error={sync.error ?? runSync.error} />
+          {sync.data && (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">{t('admin.server.sync.dbVersion')}</dt>
+              <dd className="tabular-nums">{sync.data.db_version}</dd>
+              <dt className="text-muted-foreground">{t('admin.server.sync.pdnsVersion')}</dt>
+              <dd className="flex items-center gap-2 tabular-nums">
+                {sync.data.pdns_version}
+                {drift ? <Badge variant="destructive">{t('admin.server.sync.drift', { count: sync.data.zones.length })}</Badge> : <Badge variant="secondary">{t('admin.server.sync.inSync')}</Badge>}
+              </dd>
+              {drift && (
+                <>
+                  <dt className="text-muted-foreground">{t('admin.server.sync.zones')}</dt>
+                  <dd className="font-mono text-xs">
+                    {sync.data.zones.map(z => (
+                      <div key={z.name}>{`${z.name} ${z.db ?? '-'} / ${z.pdns ?? '-'}`}</div>
+                    ))}
+                  </dd>
+                </>
+              )}
+            </dl>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={runSync.isPending}
+            onClick={() => runSync.mutateAsync().then(r => toast.success(t('admin.server.sync.done', { ...r, drift: r.zones.length }))).catch(() => {})}
+          >
+            {t('admin.server.sync.run')}
+          </Button>
         </CardContent>
       </Card>
     </div>

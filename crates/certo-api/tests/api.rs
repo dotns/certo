@@ -61,6 +61,7 @@ impl Api {
             Arc::clone(&checker) as Arc<dyn DelegationChecker>,
         );
         zones.ensure_base_zone(&[]).await.unwrap();
+        zones.sync(false).await.unwrap();
         let state = AppState::new(db, zones, opts).unwrap();
         let peer: SocketAddr = peer.parse().unwrap();
         Self {
@@ -441,8 +442,7 @@ async fn rrsets_are_managed_through_patch() {
         r.body[0],
         json!({"name": "example.com.", "type": "NS", "ttl": 3600, "records": ["ns1.auth.example.org."]})
     );
-    assert_eq!(r.body[1]["type"], "SOA");
-    assert_eq!(r.body.as_array().unwrap().len(), 2);
+    assert_eq!(r.body.as_array().unwrap().len(), 1);
 
     let r = api
         .json(
@@ -515,7 +515,7 @@ async fn rrsets_are_managed_through_patch() {
 
     let r = api.get("/api/zones/example.com", &auth).await;
     assert_eq!(r.body["status"], "active");
-    assert_eq!(r.body["rrsets"].as_array().unwrap().len(), 3);
+    assert_eq!(r.body["rrsets"].as_array().unwrap().len(), 2);
 
     let r = api.send(delete("/api/zones/example.com", &auth)).await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);

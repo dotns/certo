@@ -39,3 +39,4 @@ Each task is a single line linking to its detail file. All detailed information 
 - [x] [**20261022-1946-redirect-on-rejected-session Return to the sign-in page when the session is rejected**](20261022-1946-redirect-on-rejected-session.md) `P1`
 - [x] [**20261023-0900-reject-public-suffix-zones Reject zones that are public suffixes**](20261023-0900-reject-public-suffix-zones.md) `P1`
 - [x] [**20261101-2055-breaking-upgrade-schema-5 Breaking upgrade: schema 5 with a single upgrade path and a config-derived base zone**](20261101-2055-breaking-upgrade-schema-5.md) `P1`
+- [x] [**20261102-1006-certo-db-source-of-truth Keep every DNS fact in certo.db and derive PowerDNS from it**](20261102-1006-certo-db-source-of-truth.md) `P1`

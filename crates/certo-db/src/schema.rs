@@ -6,7 +6,7 @@ use crate::DbError;
 /// with any other version is refused and has to be migrated by hand.
 pub const DB_VERSION: u32 = 1;
 
-/// Every table of the current schema; records of hosted zones live in `PowerDNS`.
+/// Every table of the current schema. `PowerDNS` is rebuilt from the zone tables.
 const TABLES: &str = "
 CREATE TABLE IF NOT EXISTS acmedns(
     Name TEXT,
@@ -50,9 +50,34 @@ CREATE TABLE IF NOT EXISTS zones(
     last_check INT,
     last_error TEXT,
     failed_checks INTEGER NOT NULL DEFAULT 0,
-    snapshot TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    axfr_allow_from TEXT NOT NULL DEFAULT '[]',
     created_at INT NOT NULL,
     FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS zone_rrsets(
+    zone_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    rtype TEXT NOT NULL,
+    ttl INTEGER NOT NULL,
+    records TEXT NOT NULL,
+    PRIMARY KEY(zone_id, name, rtype),
+    FOREIGN KEY(zone_id) REFERENCES zones(id)
+);
+CREATE TABLE IF NOT EXISTS zone_dnssec(
+    zone_id INTEGER PRIMARY KEY,
+    nsec3 INTEGER NOT NULL DEFAULT 0,
+    algorithm TEXT NOT NULL,
+    private_key TEXT NOT NULL,
+    FOREIGN KEY(zone_id) REFERENCES zones(id)
+);
+CREATE TABLE IF NOT EXISTS zone_tsig_keys(
+    zone_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    algorithm TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    PRIMARY KEY(zone_id, name),
+    FOREIGN KEY(zone_id) REFERENCES zones(id)
 );
 ";
 
@@ -86,9 +111,11 @@ pub(crate) fn init(conn: &mut Connection) -> Result<(), DbError> {
             let version: u32 = stored
                 .parse()
                 .map_err(|_| DbError::InvalidVersion(stored.clone()))?;
-            if version != DB_VERSION || !has_column(conn, "zones", "exempt")? {
+            if version != DB_VERSION || !has_column(conn, "zones", "version")? {
                 return Err(DbError::UnsupportedVersion(version));
             }
+            // A hand-migrated database has the columns but not the zone data tables.
+            conn.execute_batch(TABLES)?;
             Ok(())
         }
     }

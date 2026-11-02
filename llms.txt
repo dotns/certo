@@ -193,6 +193,9 @@ PUT /admin/zones/:zone/activation {"exempt": true|false} → zone (serve without
 /admin/zones/:zone/... → same per-zone routes as /api/zones, for any user's zone
 
 GET /admin/records → [{domain, value, last_update}]
+
+GET /admin/sync → {db_version, pdns_version, zones: [{name, db, pdns}]} (zones whose versions differ)
+POST /admin/sync → same + {created, removed, rrsets_changed, keys_imported, records_adopted} (rebuilds PowerDNS from the database)
 ```
 
 ### 7. Server Info & Provider Detection

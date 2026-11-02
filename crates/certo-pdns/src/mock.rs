@@ -116,6 +116,19 @@ fn key_json(k: &CryptoKey) -> Value {
             "algorithm": k.algorithm, "dnskey": k.dnskey, "ds": k.ds })
 }
 
+/// The mock's "private key": a tag the public parts are derived from, so that importing
+/// the same content yields the same DNSKEY and DS.
+fn private_key(tag: u32) -> String {
+    format!("Private-key-format: v1.2\nAlgorithm: 13 (ECDSAP256SHA256)\nPrivateKey: mock{tag}\n")
+}
+
+fn key_tag(content: &str) -> Option<u32> {
+    content
+        .lines()
+        .find_map(|l| l.strip_prefix("PrivateKey: mock"))
+        .and_then(|t| t.trim().parse().ok())
+}
+
 fn tsig_json(k: &TsigKey) -> Value {
     json!({ "id": k.id, "name": k.name, "algorithm": k.algorithm, "key": k.key, "type": "TSIGKey" })
 }
@@ -285,6 +298,13 @@ async fn add_key(
         inner.next_key += 1;
         inner.next_key
     };
+    let tag = match body["content"].as_str() {
+        None => next,
+        Some(content) => match key_tag(content) {
+            Some(tag) => tag,
+            None => return error(StatusCode::UNPROCESSABLE_ENTITY, "Key could not be parsed"),
+        },
+    };
     with_zone(&s, &id, |z| {
         let key = CryptoKey {
             id: next,
@@ -292,12 +312,27 @@ async fn add_key(
             active: body["active"].as_bool().unwrap_or(true),
             published: true,
             algorithm: "ECDSAP256SHA256".to_owned(),
-            dnskey: format!("257 3 13 mockkey{next}"),
-            ds: vec![format!("{next} 13 2 mockds{next}")],
+            dnskey: format!("257 3 13 mockkey{tag}"),
+            ds: vec![format!("{tag} 13 2 mockds{tag}")],
+            privatekey: private_key(tag),
         };
         let view = key_json(&key);
         z.keys.push(key);
         (StatusCode::CREATED, Json(view)).into_response()
+    })
+    .unwrap_or_else(|| error(StatusCode::NOT_FOUND, "Not Found"))
+}
+
+async fn get_key(State(s): State<Shared>, Path((id, key)): Path<(String, u32)>) -> Response {
+    with_zone(&s, &id, |z| {
+        z.keys.iter().find(|k| k.id == key).map_or_else(
+            || error(StatusCode::NOT_FOUND, "Not Found"),
+            |k| {
+                let mut view = key_json(k);
+                view["privatekey"] = Value::String(k.privatekey.clone());
+                Json(view).into_response()
+            },
+        )
     })
     .unwrap_or_else(|| error(StatusCode::NOT_FOUND, "Not Found"))
 }
@@ -423,7 +458,7 @@ impl MockPdns {
             )
             .route(
                 "/api/v1/servers/localhost/zones/{id}/cryptokeys/{key}",
-                axum::routing::delete(delete_key),
+                get(get_key).delete(delete_key),
             )
             .route(
                 "/api/v1/servers/localhost/zones/{id}/metadata/{kind}",
@@ -487,6 +522,13 @@ impl MockPdns {
     /// All TSIG keys.
     pub fn tsig_keys(&self) -> Vec<TsigKey> {
         lock(&self.state).tsig.clone()
+    }
+
+    /// Forgets every zone and key, like a lost `pdns.sqlite3`.
+    pub fn reset(&self) {
+        let mut inner = lock(&self.state);
+        inner.zones.clear();
+        inner.tsig.clear();
     }
 }
 

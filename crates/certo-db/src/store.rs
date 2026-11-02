@@ -111,6 +111,7 @@ fn delete_subdomain_txt(
         "DELETE FROM txt WHERE Domain=?1",
         [internal_domain(subdomain, base_domain)],
     )?;
+    crate::zones::bump_base_zone(tx)?;
     Ok(())
 }
 
@@ -184,7 +185,7 @@ impl Db {
         .map_err(|_| DbError::Worker)?
     }
 
-    /// Stored schema version (3 while zones still await their import into `PowerDNS`).
+    /// Stored schema version.
     pub async fn schema_version(&self) -> Result<u32, DbError> {
         self.run(|c| schema::version(c)).await
     }
@@ -220,10 +221,13 @@ impl Db {
     pub async fn present_txt(&self, fqdn: &str, value: &str) -> Result<(), DbError> {
         let (domain, value) = (sanitize_fqdn(fqdn), value.to_owned());
         self.run(move |c| {
-            c.execute(
+            let tx = c.transaction()?;
+            tx.execute(
                 "INSERT INTO txt (Domain, Value, LastUpdate) VALUES (?1, ?2, ?3)",
                 params![domain, value, now()],
             )?;
+            crate::zones::bump_base_zone(&tx)?;
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -233,10 +237,13 @@ impl Db {
     pub async fn cleanup_txt(&self, fqdn: &str, value: &str) -> Result<(), DbError> {
         let (domain, value) = (sanitize_fqdn(fqdn), value.to_owned());
         self.run(move |c| {
-            c.execute(
+            let tx = c.transaction()?;
+            tx.execute(
                 "DELETE FROM txt WHERE Domain=?1 AND Value=?2",
                 params![domain, value],
             )?;
+            crate::zones::bump_base_zone(&tx)?;
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -256,6 +263,7 @@ impl Db {
                     SELECT rowid FROM txt WHERE Domain=?1 ORDER BY LastUpdate DESC, rowid DESC LIMIT 2)",
                 params![domain],
             )?;
+            crate::zones::bump_base_zone(&tx)?;
             tx.commit()?;
             Ok(())
         })

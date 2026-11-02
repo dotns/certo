@@ -42,7 +42,11 @@ async fn fresh_database_has_current_schema() {
     assert_eq!(version(&path), DB_VERSION.to_string());
     assert!(columns(&path, "user_domains").contains(&"allowfrom".to_owned()));
     assert!(!columns(&path, "users").contains(&"api_key".to_owned()));
-    assert!(columns(&path, "zones").contains(&"exempt".to_owned()));
+    assert!(columns(&path, "zones").contains(&"version".to_owned()));
+    assert!(!columns(&path, "zones").contains(&"snapshot".to_owned()));
+    assert!(columns(&path, "zone_rrsets").contains(&"records".to_owned()));
+    assert!(columns(&path, "zone_dnssec").contains(&"private_key".to_owned()));
+    assert!(columns(&path, "zone_tsig_keys").contains(&"secret".to_owned()));
     for table in ["records", "zone_keys", "tsig_keys"] {
         assert!(columns(&path, table).is_empty(), "{table}");
     }
@@ -91,6 +95,27 @@ fn go_database_with_the_same_version_number_is_rejected() {
     let err = Db::open(path.to_str().unwrap()).unwrap_err();
     assert!(matches!(err, DbError::UnsupportedVersion(1)), "{err}");
     assert!(columns(&path, "zones").is_empty());
+}
+
+#[test]
+fn hand_migrated_database_gets_the_zone_data_tables() {
+    // deployment.md: version set to 1 and the two columns added; tables come from certo.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("migrated.db");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE acmedns(Name TEXT, Value TEXT);
+             INSERT INTO acmedns (Name, Value) VALUES ('db_version', '1');
+             CREATE TABLE zones(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT UNIQUE NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 0, exempt INTEGER NOT NULL DEFAULT 0, verified_at INT, last_check INT,
+                 last_error TEXT, failed_checks INTEGER NOT NULL DEFAULT 0, snapshot TEXT, created_at INT NOT NULL,
+                 version INTEGER NOT NULL DEFAULT 1, axfr_allow_from TEXT NOT NULL DEFAULT '[]');",
+        )
+        .unwrap();
+    Db::open(path.to_str().unwrap()).unwrap();
+    assert!(columns(&path, "zone_rrsets").contains(&"records".to_owned()));
+    assert!(columns(&path, "users").contains(&"username".to_owned()));
 }
 
 #[test]

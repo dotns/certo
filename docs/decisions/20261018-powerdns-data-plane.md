@@ -1,7 +1,8 @@
 # Serve DNS with a bundled PowerDNS Authoritative instead of hickory-server
 
 - **date**: 2026-10-18
-- **status**: accepted
+- **status**: accepted; the "keys and secrets live in PowerDNS' database" consequence is
+  superseded by `20261102-certo-db-source-of-truth.md`
 - **relatedPlan**: 20261018-0445-pdns-control-plane
 
 ## Context

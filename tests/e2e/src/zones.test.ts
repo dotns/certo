@@ -101,9 +101,9 @@ describe("hosted zones", () => {
     expect(after.find((r) => r.type === "A")).toEqual({ name: `www.${name}.`, type: "A", ttl: 120, records: ["192.0.2.10"] });
     expect(after.find((r) => r.type === "TXT")?.records).toEqual(['"v=spf1 -all"']);
     const listed = await req("GET", `/api/zones/${name}/rrsets`, { token: u.token });
-    expect(listed.body.map((r: any) => r.type).sort()).toEqual(["A", "CNAME", "MX", "NS", "SOA", "TXT"]);
+    expect(listed.body.map((r: any) => r.type).sort()).toEqual(["A", "CNAME", "MX", "NS", "TXT"]);
     const detail = await req("GET", `/api/zones/${name}`, { token: u.token });
-    expect(detail.body.rrsets).toHaveLength(6);
+    expect(detail.body.rrsets).toHaveLength(5);
 
     expect(dig(`www.${name}`, "A", srv.dnsPort).answers).toEqual(["A 192.0.2.10"]);
     expect(dig(`alias.${name}`, "A", srv.dnsPort).answers).toEqual([`CNAME www.${name}.`, "A 192.0.2.10"]);

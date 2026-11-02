@@ -18,7 +18,7 @@ produces a useless binding.
 | `acme_domain` | string | `domain` | Challenge domain inside `domain`: challenge records live at `<subdomain>.<acme_domain>`, e.g. `s.example.com`. Must equal `domain` or be a name under it; anything else aborts startup |
 | `nsname` | string | **required in practice** | Nameserver name: SOA MNAME and apex NS of the base zone and of every hosted zone, and the target a hosted zone must be delegated to (`ns_target` in `GET /api/info`) |
 | `nsadmin` | string | — | SOA admin address; `@` is written as `.` (e.g. `admin.example.com`) |
-| `records` | []string | empty | Records seeded into the base zone **when it is first created** (zone-file syntax, inside `zone`). Later changes are made through the admin zone API, not by editing this list |
+| `records` | []string | empty | Records stored for the base zone **when its row is first created** (zone-file syntax, inside `zone`); the list is ignored afterwards. Later changes are made through the admin zone API, not by editing this list |
 | `debug` | bool | `false` | Accepted for compatibility; use `logconfig.loglevel = "debug"` for verbose logs |
 
 `domain` and `nsname` are not validated at load time, but nothing resolves correctly
