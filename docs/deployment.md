@@ -210,13 +210,33 @@ otherwise the self-issued challenge cannot be validated.
   (5 exits within a minute) certo exits too, so lode or Docker restarts the pair. Its log
   lines appear in certo's log.
 - **Upgrades** — under lode, `policy = "auto"` installs new releases by itself and
-  `lode-cli update` does it on demand; otherwise replace the binary. Schema migrations run
-  automatically at startup. A database created by a *newer* certo makes an older binary
-  refuse to start, so roll forward, not back (a lode rollback to a release with an older
-  schema fails the same way). Rust releases use schema version 4, which the Go releases
-  cannot read: back up the database before switching. Upgrading a schema-3 database
-  (releases before PowerDNS) imports every hosted zone into PowerDNS once at first start;
-  DNSSEC zones get **new keys**, so publish the new DS at the parent afterwards (the old DS
-  is logged at warn level together with the new one). TSIG secrets are preserved.
+  `lode-cli update` does it on demand; otherwise replace the binary. There is no automatic
+  schema migration: the database must be at schema version 1 of this generation, anything
+  else makes certo refuse to start (`unsupported database schema …`). Back up `certo.db`
+  and `data/pdns/pdns.sqlite3` before switching releases.
+
+  Migrating a database of the previous generation (Rust releases with schema 4) by hand,
+  with certo stopped:
+
+  ```sh
+  sqlite3 data/db/certo.db "UPDATE acmedns SET Value='1' WHERE Name='db_version';
+                            DELETE FROM zones WHERE user_id IS NULL;"
+  ```
+
+  The deleted rows are the base zone(s); certo re-creates the row for `general.domain` at
+  the next start. If `general.domain` was changed at some point, the PowerDNS zone of the
+  old base domain is still served and shadows every name below it (challenge records live in
+  `general.domain`): remove it from `data/pdns/pdns.sqlite3` as well, e.g. for `s.example.com`:
+
+  ```sh
+  sqlite3 data/pdns/pdns.sqlite3 "DELETE FROM records WHERE domain_id IN (SELECT id FROM domains WHERE name='s.example.com');
+                                  DELETE FROM domainmetadata WHERE domain_id IN (SELECT id FROM domains WHERE name='s.example.com');
+                                  DELETE FROM cryptokeys WHERE domain_id IN (SELECT id FROM domains WHERE name='s.example.com');
+                                  DELETE FROM domains WHERE name='s.example.com';"
+  ```
+
+  Also delete any NS record for `general.acme_domain` inside the base zone (admin area →
+  base zone → records): it turns the challenge names into a delegation. Databases of the Go
+  releases or of schema 3 (before PowerDNS) are not covered; start from a fresh database.
 - **Keys** — DNSSEC private keys and TSIG secrets live in PowerDNS' database under
   `[pdns] dir`; losing it means re-keying signed zones (new DS at the parent).

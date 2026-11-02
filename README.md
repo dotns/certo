@@ -122,10 +122,10 @@ just pdns-build && cp target/debug/pdns_server target/dist/        # static Powe
 The dashboard in `web/dist` is embedded at build time; without it the binary serves the API
 and DNS only. certo starts `pdns_server` from the directory of its own executable.
 
-> Upgrading: the database is upgraded in place to schema version 4 at first start, which
-> older releases cannot open — back it up first. Hosted zones of a pre-PowerDNS database are
-> imported once; DNSSEC zones get new keys, so re-publish their DS records. Certificates in
-> `acme_cache_dir` are reused.
+> Databases: this generation of certo uses schema version 1 and has no upgrade chain. A
+> database from an earlier release (Go releases, or the Rust releases before this reset) is
+> refused at startup and has to be migrated by hand, see
+> [docs/deployment.md](docs/deployment.md#upgrades). Certificates in `acme_cache_dir` are reused.
 
 ## Usage with lego (httpreq)
 

@@ -2,7 +2,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use base64::Engine as _;
 use certo_core::Zone;
 use certo_db::{Db, DbError};
 use rustc_hash::FxHashMap;
@@ -772,69 +771,6 @@ impl Zones {
             }
         }
         Ok(report)
-    }
-
-    /// Imports the zones of a version 3 database into `PowerDNS`, then finishes the schema
-    /// upgrade. Returns the number of zones imported.
-    pub async fn import_legacy(&self) -> Result<usize, ZoneOpError> {
-        let legacy = self.db.legacy_zones().await?;
-        for z in &legacy {
-            if self.client.zone(&z.name).await?.is_none() {
-                let mut records: Vec<(String, u32, String, String)> = z
-                    .records
-                    .iter()
-                    .map(|(n, t, ttl, d)| (n.clone(), *ttl, t.clone(), d.clone()))
-                    .collect();
-                if !records.iter().any(|(n, _, t, _)| *n == z.name && t == "NS") {
-                    records.push((
-                        z.name.clone(),
-                        names::DEFAULT_TTL,
-                        "NS".to_owned(),
-                        apex(&self.policy.nsname),
-                    ));
-                }
-                self.client
-                    .create_zone(&NewZone::native(
-                        apex(&z.name),
-                        Vec::new(),
-                        group_rrsets(records),
-                    ))
-                    .await?;
-            }
-            if z.dnssec {
-                let key = self.client.add_csk(&z.name, DNSSEC_ALGORITHM).await?;
-                self.client
-                    .set_nsec3param(&z.name, z.nsec3.then_some(NSEC3_PARAM))
-                    .await?;
-                warn!(zone = %z.name, ds = ?key.ds, "DNSSEC re-keyed during import: publish the new DS at the registrar");
-            }
-            if !z.axfr_allow_from.is_empty() {
-                self.client
-                    .set_metadata(&z.name, ALLOW_AXFR_FROM, z.axfr_allow_from.clone())
-                    .await?;
-            }
-            let mut allowed = Vec::new();
-            for (name, algorithm, secret) in &z.tsig_keys {
-                let key = crate::TsigKey {
-                    id: String::new(),
-                    name: name.clone(),
-                    algorithm: algorithm.clone(),
-                    key: base64::engine::general_purpose::STANDARD.encode(secret),
-                };
-                match self.client.create_tsig_key(&key).await {
-                    Ok(_) | Err(PdnsError::Api { status: 409, .. }) => allowed.push(name.clone()),
-                    Err(e) => return Err(e.into()),
-                }
-            }
-            if !allowed.is_empty() {
-                self.client
-                    .set_metadata(&z.name, TSIG_ALLOW_AXFR, allowed)
-                    .await?;
-            }
-            info!(zone = %z.name, records = z.records.len(), "zone imported into PowerDNS");
-        }
-        self.db.complete_import().await?;
-        Ok(legacy.len())
     }
 }
 

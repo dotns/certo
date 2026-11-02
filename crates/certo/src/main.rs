@@ -81,13 +81,6 @@ async fn start_zones(config: &Config, db: Db) -> anyhow::Result<(Supervisor, Zon
         nsname: supervisor_nsname(config),
     };
     let zones = Zones::new(db, supervisor.client(), policy, Arc::new(checker));
-    let imported = zones
-        .import_legacy()
-        .await
-        .context("legacy zone import failed")?;
-    if imported > 0 {
-        info!(zones = imported, "imported zones from the previous schema");
-    }
     zones
         .ensure_base_zone(&config.general.records)
         .await

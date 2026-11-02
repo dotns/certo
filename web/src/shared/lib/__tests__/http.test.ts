@@ -67,6 +67,13 @@ describe('request', () => {
     expect(useSession.getState().token).toBeNull()
   })
 
+  it('signs out on any 401 from a session request', async () => {
+    useSession.getState().signIn('jwt-1')
+    mockFetch(401, { error: 'unauthorized' })
+    await request('/api/domains').catch(() => {})
+    expect(useSession.getState().token).toBeNull()
+  })
+
   it('keeps the session when the admin key is rejected', async () => {
     useSession.getState().signIn('jwt-1')
     useSession.getState().setAdminKey('nope')

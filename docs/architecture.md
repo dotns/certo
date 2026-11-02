@@ -19,7 +19,7 @@ data goes through the API.
    `./data/config.toml`) and load the config (file, then `PORT` and `CERTO_<SECTION>__<KEY>`
    env overrides).
 2. Set up logging, install the rustls `aws-lc-rs` provider.
-3. `Db::open` — open SQLite, create or upgrade the schema.
+3. `Db::open` — open SQLite, create the schema or check its version.
 4. `Supervisor::start` (`certo-pdns`) — resolve the `pdns_server` binary (`[pdns] binary`,
    default next to the certo executable), create `[pdns] dir` (0700), initialize
    `pdns.sqlite3` from the embedded PowerDNS schema when missing, write `pdns.conf` (0600)
@@ -27,7 +27,7 @@ data goes through the API.
    supervisor restarts PowerDNS with exponential backoff (max 30 s) when it exits; after 5
    exits within a minute certo itself exits non-zero so the outer supervisor restarts the
    whole tree.
-5. Build the `Zones` service: import a schema-3 database once (see
+5. Build the `Zones` service (see
    [Migrations](#migrations)), create the base zone when PowerDNS does not have it, and
    reconcile every challenge TXT name from the `txt` table into it.
 6. Start the HTTP server (plain, PEM files, or ACME via certo's own DNS) and the hourly
@@ -40,8 +40,8 @@ data goes through the API.
 | Crate | Responsibility |
 |---|---|
 | `certo-core` | Config (`config.rs`), domain types, identifier generation (`ids.rs`), scope matching |
-| `certo-db` | SQLite via `rusqlite` (bundled). One connection behind a mutex, calls run on `spawn_blocking`. Owns schema creation and versioned upgrades |
-| `certo-pdns` | PowerDNS supervisor and generated config, HTTP API client, rrset validation, delegation checker, `Zones` service (base zone, challenge TXT sync, activation cycle, DNSSEC, AXFR/TSIG, legacy import). Feature `mock` provides an in-memory PowerDNS API and a scripted checker for tests |
+| `certo-db` | SQLite via `rusqlite` (bundled). One connection behind a mutex, calls run on `spawn_blocking`. Owns schema creation and the version check |
+| `certo-pdns` | PowerDNS supervisor and generated config, HTTP API client, rrset validation, delegation checker, `Zones` service (base zone, challenge TXT sync, activation cycle, DNSSEC, AXFR/TSIG). Feature `mock` provides an in-memory PowerDNS API and a scripted checker for tests |
 | `certo-api` | `axum` HTTP layer: challenge protocols, dashboard API, zone API, admin API, CORS, SPA serving, TLS and ACME |
 | `certo` | Binary: wiring, logging, shutdown |
 | `web` | React SPA; `certo-api` embeds `web/dist` at build time (`rust-embed`) |
@@ -215,7 +215,7 @@ of a comma-separated list).
 
 ## Database
 
-certo's SQLite database, schema version **4**, tracked in `acmedns.db_version`:
+certo's SQLite database, schema version **1**, tracked in `acmedns.db_version`:
 
 ```
 acmedns(Name TEXT, Value TEXT)                        -- key/value metadata, incl. db_version
@@ -257,22 +257,12 @@ TSIG secret is returned by the API only once, at creation.
 
 ### Migrations
 
-`Db::open` reads `db_version` (`crates/certo-db/src/schema.rs`):
-
-- version > `DB_VERSION` → refuse to start ("regenerate the database").
-- version < `DB_VERSION` → run the upgrade chain, each step in one transaction: `1 → 2`
-  adds `user_domains.allowfrom`, `2 → 3` adds the zone tables, `3 → 4` adds the activation
-  columns and schedules the one-time import.
-
-The `3 → 4` import runs at startup once PowerDNS is ready: every zone of the old `records`,
-`zone_keys` and `tsig_keys` tables is created in PowerDNS with its rrsets, DNSSEC is
-re-enabled with a fresh key where it was on (the new DS is logged at warn level), TSIG keys
-are created with their old secrets, transfer settings are copied, and every imported zone is
-marked active and exempt (it was served before). The old tables are then dropped. A failed
-import leaves the database at version 3 and aborts the start.
-
-A fresh database is created at the current version directly. Version 3 and 4 databases
-cannot be opened by the Go releases of certo.
+There is no upgrade chain. `Db::open` (`crates/certo-db/src/schema.rs`) creates every
+table of a new database and stores `db_version = 1`. An existing database is accepted only
+when `db_version` is `1` **and** the `zones` table has the current columns (the Go
+releases also wrote version 1 with a different layout); anything else fails with
+`unsupported database schema N … migrate the database by hand`. The manual steps for a
+database of the previous generation are in [deployment.md](deployment.md#upgrades).
 
 ## Identifier formats
 

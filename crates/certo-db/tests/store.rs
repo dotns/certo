@@ -1,4 +1,4 @@
-//! Storage behavior, ported from the Go implementation's tests plus migration coverage.
+//! Storage behavior, ported from the Go implementation's tests, plus schema checks.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -53,27 +53,44 @@ async fn fresh_database_has_current_schema() {
     assert_eq!(version(&path), DB_VERSION.to_string());
 }
 
-#[tokio::test]
-async fn v1_database_is_upgraded_and_keeps_data() {
+#[test]
+fn earlier_generation_database_is_rejected() {
+    // A database of the previous certo generation at its last schema (4).
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("v1.db");
+    let path = dir.path().join("old.db");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE acmedns(Name TEXT, Value TEXT);
+             INSERT INTO acmedns (Name, Value) VALUES ('db_version', '4');",
+        )
+        .unwrap();
+    let err = Db::open(path.to_str().unwrap()).unwrap_err();
+    assert!(matches!(err, DbError::UnsupportedVersion(4)), "{err}");
+    assert!(
+        err.to_string().contains("migrate the database by hand"),
+        "{err}"
+    );
+    assert_eq!(version(&path), "4");
+}
+
+#[test]
+fn go_database_with_the_same_version_number_is_rejected() {
+    // The Go implementation also wrote db_version 1, with a different layout.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("go.db");
     Connection::open(&path)
         .unwrap()
         .execute_batch(
             "CREATE TABLE acmedns(Name TEXT, Value TEXT);
              INSERT INTO acmedns (Name, Value) VALUES ('db_version', '1');
              CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at INT NOT NULL);
-             CREATE TABLE user_domains(user_id INTEGER NOT NULL, domain TEXT NOT NULL, subdomain TEXT UNIQUE NOT NULL, UNIQUE(user_id, domain));
-             INSERT INTO users (username, password_hash, created_at) VALUES ('old', 'h', 1);
-             INSERT INTO user_domains (user_id, domain, subdomain) VALUES (1, 'old.com', 'abcd1234');",
+             CREATE TABLE user_domains(user_id INTEGER NOT NULL, domain TEXT NOT NULL, subdomain TEXT UNIQUE NOT NULL, UNIQUE(user_id, domain));",
         )
         .unwrap();
-
-    let db = Db::open(path.to_str().unwrap()).unwrap();
-    assert_eq!(version(&path), DB_VERSION.to_string());
-    let (uid, domain, allow) = db.user_domain_by_subdomain("abcd1234").await.unwrap();
-    assert_eq!((uid, domain.as_str()), (1, "old.com"));
-    assert!(allow.is_empty());
+    let err = Db::open(path.to_str().unwrap()).unwrap_err();
+    assert!(matches!(err, DbError::UnsupportedVersion(1)), "{err}");
+    assert!(columns(&path, "zones").is_empty());
 }
 
 #[test]
@@ -84,11 +101,11 @@ fn newer_database_version_is_rejected() {
         .unwrap()
         .execute_batch(
             "CREATE TABLE acmedns(Name TEXT, Value TEXT);
-             INSERT INTO acmedns (Name, Value) VALUES ('db_version', '6');",
+             INSERT INTO acmedns (Name, Value) VALUES ('db_version', '2');",
         )
         .unwrap();
     let err = Db::open(path.to_str().unwrap()).unwrap_err();
-    assert!(err.to_string().contains("regenerate the database"), "{err}");
+    assert!(matches!(err, DbError::UnsupportedVersion(2)), "{err}");
 }
 
 #[test]
@@ -349,56 +366,4 @@ async fn delete_user_removes_keys_and_domains() {
     assert!(db.txt_for_domain(&name).await.unwrap().is_empty());
     assert!(db.subdomain_owner(&d.subdomain).await.is_err());
     assert!(db.api_key_by_value(&key.key).await.is_err());
-}
-
-/// `fixtures/go-v2.db` was written by the Go implementation (schema v2): user `gouser` with
-/// domain `go.example.com`, a scoped key, one TXT value and one acme-dns account.
-#[tokio::test]
-async fn reads_and_extends_database_written_by_go() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("go.db");
-    std::fs::copy("tests/fixtures/go-v2.db", &path).unwrap();
-    let db = Db::open(path.to_str().unwrap()).unwrap();
-
-    let user = db.user_by_username("gouser").await.unwrap();
-    assert_eq!(user.password_hash, "$2a$10$abcdefghijklmnopqrstuv");
-    let domains = db.user_domains(user.id).await.unwrap();
-    assert_eq!(domains[0].domain, "go.example.com");
-    assert_eq!(domains[0].subdomain, "f1c667bb");
-    assert_eq!(
-        domains[0].subdomain,
-        certo_core::ids::subdomain("gouser", "go.example.com", 0)
-    );
-
-    let key = db
-        .api_key_by_value("z3x04v1nxflou3e2hf07k5hk0x8jg5r9")
-        .await
-        .unwrap();
-    assert_eq!(key.scope, ["*.go.example.com", "x.org"]);
-    assert!(key.has_domain_access("a.go.example.com"));
-    assert_eq!(
-        db.txt_for_domain("_acme-challenge.go.example.com")
-            .await
-            .unwrap(),
-        ["go-token"]
-    );
-
-    let (uid, domain, allow) = db.user_domain_by_subdomain("hru2zenlwr").await.unwrap();
-    assert_eq!(domain, "hru2zenlwr");
-    assert_eq!(allow, ["198.51.100.0/24"]);
-    let acme = db
-        .api_key_by_value("fjj98fj19j5q7upaj9zpgq9xiznj45vt")
-        .await
-        .unwrap();
-    assert_eq!(acme.user_id, uid);
-
-    let added = db.create_user("rustuser", "h").await.unwrap();
-    assert!(added.id > user.id);
-    assert_eq!(version(&path), DB_VERSION.to_string());
-    // The upgrade added the zones table.
-    let zone = db
-        .create_zone(Some(user.id), "go.example.com")
-        .await
-        .unwrap();
-    assert_eq!(zone.owner.as_deref(), Some("gouser"));
 }

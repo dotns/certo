@@ -117,7 +117,7 @@ cargo build --locked --profile dist -p certo
 
 `web/dist` 在编译时内嵌;不存在时二进制只提供 API 与 DNS。
 
-> 从 Go 版本升级:首次启动会把数据库就地升级到 schema 版本 3,Go 版本无法再打开,升级前请先备份。`acme_cache_dir` 中的证书会被继续使用。
+> 数据库:当前这一代 certo 使用 schema 版本 1,没有自动升级链。早期版本(Go 版本,以及重置之前的 Rust 版本)的数据库启动时会被拒绝,需要按 [docs/deployment.md](docs/deployment.md#upgrades) 手动迁移。`acme_cache_dir` 中的证书会被继续使用。
 
 ## 使用方式
 

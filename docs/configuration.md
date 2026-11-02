@@ -14,7 +14,7 @@ produces a useless binding.
 |---|---|---|---|
 | `listen` | string | **required** | DNS listen address handed to `pdns_server`, e.g. `127.0.0.1:53`; `:53` binds all interfaces. Empty aborts startup |
 | `protocol` | string | — | Ignored since PowerDNS always serves UDP and TCP; accepted so older config files keep loading |
-| `domain` | string | **required in practice** | The zone certo is authoritative for (the base zone), e.g. `example.com`; also the name of certo's own certificate when `api.tls = letsencrypt*` |
+| `domain` | string | **required in practice** | The zone certo is authoritative for (the base zone), e.g. `example.com`; also the name of certo's own certificate when `api.tls = letsencrypt*`. Changing it later leaves the old base zone in PowerDNS and in the `zones` table; remove both by hand (see [deployment.md](deployment.md#upgrades)) |
 | `acme_domain` | string | `domain` | Challenge domain inside `domain`: challenge records live at `<subdomain>.<acme_domain>`, e.g. `s.example.com`. Must equal `domain` or be a name under it; anything else aborts startup |
 | `nsname` | string | **required in practice** | Nameserver name: SOA MNAME and apex NS of the base zone and of every hosted zone, and the target a hosted zone must be delegated to (`ns_target` in `GET /api/info`) |
 | `nsadmin` | string | — | SOA admin address; `@` is written as `.` (e.g. `admin.example.com`) |

@@ -22,9 +22,6 @@ export interface RequestOptions {
   signal?: AbortSignal
 }
 
-/** Codes the API answers with when the session token is no longer usable. */
-const SESSION_ENDED = new Set(['invalid_token', 'token_expired', 'user_not_found'])
-
 /** Calls the certo API on the same origin; JSON in, JSON out. */
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { token, adminKey } = useSession.getState()
@@ -56,7 +53,8 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   if (!res.ok) {
     const body = (typeof data === 'object' && data !== null ? data : {}) as { error?: string, message?: string }
     const code = body.error ?? `http_${res.status}`
-    if (res.status === 401 && !opts.admin && SESSION_ENDED.has(code))
+    // Any 401 on a session request means the token is no longer usable; the app layout then returns to sign-in.
+    if (res.status === 401 && !opts.admin)
       useSession.getState().signOut()
     throw new ApiError(res.status, code, body.message)
   }

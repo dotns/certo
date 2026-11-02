@@ -18,9 +18,9 @@ pub enum DbError {
     /// `db_version` is not a number.
     #[error("invalid database version {0:?}")]
     InvalidVersion(String),
-    /// `db_version` is newer than this build understands.
+    /// `db_version` (or the table layout) is not the one this build uses.
     #[error(
-        "unsupported database version {0}, expected {expected}; regenerate the database",
+        "unsupported database schema {0} (this release uses {expected}); migrate the database by hand, see docs/deployment.md",
         expected = schema::DB_VERSION
     )]
     UnsupportedVersion(u32),

@@ -36,4 +36,6 @@ Each task is a single line linking to its detail file. All detailed information 
 - [x] [**20261021-0213-base-zone-above-challenge-domain Serve a base zone above the challenge domain**](20261021-0213-base-zone-above-challenge-domain.md) `P1`
 - [x] [**20261021-0408-dashboard-feature-completion Complete the dashboard feature set**](20261021-0408-dashboard-feature-completion.md) `P1`
 - [x] [**20261022-0431-dashboard-i18n Localize the dashboard (English and Simplified Chinese)**](20261022-0431-dashboard-i18n.md) `P1`
+- [x] [**20261022-1946-redirect-on-rejected-session Return to the sign-in page when the session is rejected**](20261022-1946-redirect-on-rejected-session.md) `P1`
 - [x] [**20261023-0900-reject-public-suffix-zones Reject zones that are public suffixes**](20261023-0900-reject-public-suffix-zones.md) `P1`
+- [x] [**20261101-2055-breaking-upgrade-schema-5 Breaking upgrade: schema 5 with a single upgrade path and a config-derived base zone**](20261101-2055-breaking-upgrade-schema-5.md) `P1`

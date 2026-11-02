@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{
     Db, DbError,
-    store::{normalize, now, parse_list},
+    store::{normalize, now},
 };
 
 const ZONE_SELECT: &str = "SELECT z.id, z.user_id, u.username, z.name, z.active, z.exempt, \
@@ -55,25 +55,6 @@ fn zone_by_id(c: &Connection, id: i64) -> Result<Zone, DbError> {
     c.query_row(&format!("{ZONE_SELECT} WHERE z.id=?1"), [id], zone_row)
         .optional()?
         .ok_or(DbError::NotFound("zone"))
-}
-
-/// A version 3 zone awaiting its import into `PowerDNS`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacyZone {
-    /// Owning user.
-    pub user_id: i64,
-    /// Zone apex, lowercase without trailing dot.
-    pub name: String,
-    /// DNSSEC was enabled.
-    pub dnssec: bool,
-    /// NSEC3 was selected.
-    pub nsec3: bool,
-    /// CIDRs allowed to transfer the zone.
-    pub axfr_allow_from: Vec<String>,
-    /// Records in presentation format: `(name, type, ttl, rdata)`.
-    pub records: Vec<(String, String, u32, String)>,
-    /// TSIG keys: `(name, algorithm, secret)`.
-    pub tsig_keys: Vec<(String, String, Vec<u8>)>,
 }
 
 impl Db {
@@ -220,57 +201,6 @@ impl Db {
                 .optional()?
                 .flatten(),
             )
-        })
-        .await
-    }
-
-    /// Zones of a version 3 database that still have to be imported into `PowerDNS`;
-    /// empty once the schema is at version 4.
-    pub async fn legacy_zones(&self) -> Result<Vec<LegacyZone>, DbError> {
-        self.run(|c| {
-            if crate::schema::version(c)? != 3 {
-                return Ok(Vec::new());
-            }
-            let zones: Vec<(i64, i64, String, bool, String, String)> = c
-                .prepare(
-                    "SELECT id, user_id, name, dnssec_enabled, nsec_mode, axfr_allow_from FROM zones ORDER BY name",
-                )?
-                .query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-                })?
-                .collect::<Result<_, _>>()?;
-            let mut out = Vec::with_capacity(zones.len());
-            for (id, user_id, name, dnssec, nsec_mode, allow_from) in zones {
-                let records = c
-                    .prepare("SELECT name, rtype, ttl, rdata FROM records WHERE zone_id=?1 ORDER BY id")?
-                    .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                    .collect::<Result<_, _>>()?;
-                let tsig_keys = c
-                    .prepare("SELECT name, algorithm, secret FROM tsig_keys WHERE zone_id=?1 ORDER BY id")?
-                    .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                    .collect::<Result<_, _>>()?;
-                out.push(LegacyZone {
-                    user_id,
-                    name,
-                    dnssec,
-                    nsec3: nsec_mode == "nsec3",
-                    axfr_allow_from: parse_list(&allow_from),
-                    records,
-                    tsig_keys,
-                });
-            }
-            Ok(out)
-        })
-        .await
-    }
-
-    /// Finishes the version 3 → 4 upgrade once every legacy zone exists in `PowerDNS`.
-    pub async fn complete_import(&self) -> Result<(), DbError> {
-        self.run(|c| {
-            if crate::schema::version(c)? == 3 {
-                crate::schema::upgrade_3_to_4(c)?;
-            }
-            Ok(())
         })
         .await
     }

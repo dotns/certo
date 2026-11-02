@@ -160,3 +160,20 @@ Base UI `Menu.GroupLabel` throws error #31 (`MenuGroupContext is missing`) unles
 ## 2026-10-23 09:20 [progress]
 
 Task 20261023-0900-reject-public-suffix-zones: zone creation refuses names that are themselves a public suffix (`in-addr.arpa`, `ip6.arpa`, `co.uk`, `github.io`, …) with `403 zone_not_allowed`, using the Public Suffix List compiled in by `psl` 2.1.245 (ICANN and private sections). Such a zone could never be delegated but, as a pending zone, blocked every other user's zones below it for up to 30 days and could be re-created at once. The base zone and legacy imports bypass the rule. From the 2026-10-17 code review; its other two findings no longer applied (rrset patches to PowerDNS replaced full rebuilds, and the overlap check already runs inside the create transaction). Verified by new zone-service and API tests, 77 Rust tests, all gates and e2e 45/45.
+
+## 2026-10-23 23:00 [progress]
+
+Task 20261022-1946-redirect-on-rejected-session completed. `request()` in `web/src/shared/lib/http.ts` clears the session on any `401` from a session-authenticated request (admin-key requests are unaffected), so the app layout returns to `/login` instead of rendering "unauthorized" inline. The previous allow-list (`invalid_token`, `token_expired`, `user_not_found`) never matched because `certo-api` answers every rejected bearer with `unauthorized`. Covered by a new `http.test.ts` case; verified with Playwright (bad token → `/login`, token removed, no inline alert).
+
+## 2026-11-02 00:40 [decision]
+
+Plan 20261101-2101-breaking-upgrade-schema-5 revised by the owner: instead of schema 5 with a 4 → 5 step, the schema is reset to version 1 of a new generation with no upgrade chain at all; earlier databases are migrated by hand. All GitHub releases and tags (v0.1.0 – v0.3.0) are removed. Recorded in `docs/decisions/20261102-schema-reset-no-upgrade-chain.md`.
+
+## 2026-11-02 00:40 [progress]
+
+Plan 20261101-2101-breaking-upgrade-schema-5 completed as revised. `certo-db`: `DB_VERSION = 1`, `init` creates the full schema for a new database and refuses any other version or a Go-era layout (`UnsupportedVersion`, message points at the manual migration); removed `upgrade_1_to_2/2_to_3/3_to_4`, the v3 zone tables, `LegacyZone`/`legacy_zones`/`complete_import`, the `go-v2.db` fixture and its test. `certo-pdns`: `import_legacy` removed (and its call in `main.rs`). Docs: README / README_CN upgrade notes, `architecture.md` Migrations, `deployment.md` Upgrades with the manual SQL for a schema-4 database and for a stale base zone in `pdns.sqlite3`, `configuration.md` `domain` row. Rust tests: 75.
+
+## 2026-11-02 00:40 [pitfall]
+
+Root cause of "TXT visible in the dashboard, NXDOMAIN in DNS" on the owner's server: after `general.domain` moved from `s.dnsall.com` to `dnsall.com` (v0.1.1), the old base zone stayed in PowerDNS and in the `zones` table as a system row; PowerDNS answers `*.s.dnsall.com` from that more specific zone while certo writes challenge TXT into `dnsall.com`. The system row cannot be deleted from the dashboard. An NS record for `s.dnsall.com` added by hand in the base zone masks the symptom by turning the names into a delegation. Fixed by data migration (see deployment.md), not by code.
+
