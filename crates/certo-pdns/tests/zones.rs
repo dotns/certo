@@ -761,3 +761,25 @@ async fn sync_rebuilds_pdns_from_the_database() {
     assert!(served.metadata.contains_key(certo_pdns::VERSION_METADATA));
     assert!(h.zones.status().await.unwrap().zones.is_empty());
 }
+
+#[tokio::test]
+async fn half_created_base_zone_row_is_completed() {
+    let h = harness().await;
+    // A start that failed after inserting the row leaves it pending without records.
+    h.db.create_zone(None, "dns.example.net").await.unwrap();
+    h.zones
+        .ensure_base_zone(&["dns.example.net. A 198.51.100.1".to_owned()])
+        .await
+        .unwrap();
+    let base = h.db.zone("dns.example.net").await.unwrap();
+    assert!(base.active && base.exempt);
+    assert_eq!(h.db.zone_rrsets(base.id).await.unwrap().len(), 2);
+    assert_eq!(h.zones.sync(false).await.unwrap().created, 1);
+    assert_eq!(
+        h.pdns
+            .zone("dns.example.net")
+            .unwrap()
+            .contents("dns.example.net", "A"),
+        ["198.51.100.1"]
+    );
+}

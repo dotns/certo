@@ -369,8 +369,8 @@ impl Zones {
     /// lines; an existing row is left untouched.
     pub async fn ensure_base_zone(&self, seed: &[String]) -> Result<(), ZoneOpError> {
         let base = &self.policy.base_zone;
-        match self.db.zone(base).await {
-            Ok(_) => {
+        let existing = match self.db.zone(base).await {
+            Ok(zone) if zone.active => {
                 if !seed.is_empty() {
                     info!(
                         "general.records was imported into the base zone; it can be removed from the config"
@@ -378,9 +378,11 @@ impl Zones {
                 }
                 return Ok(());
             }
-            Err(DbError::NotFound(_)) => {}
+            // Left behind by a start that failed between creating the row and activating it.
+            Ok(zone) => Some(zone),
+            Err(DbError::NotFound(_)) => None,
             Err(e) => return Err(e.into()),
-        }
+        };
         let mut records = Vec::new();
         for line in seed {
             match parse_static(line) {
@@ -401,8 +403,13 @@ impl Zones {
         }
         let rrsets = group_rrsets(records);
         info!(zone = %base, rrsets = rrsets.len(), "creating the base zone");
-        let zone = self.db.create_zone(None, base).await?;
-        self.db.replace_zone_rrsets(zone.id, &rrsets).await?;
+        let zone = match existing {
+            Some(zone) => zone,
+            None => self.db.create_zone(None, base).await?,
+        };
+        if self.db.zone_rrsets(zone.id).await?.is_empty() {
+            self.db.replace_zone_rrsets(zone.id, &rrsets).await?;
+        }
         self.db.activate_zone(zone.id, true).await?;
         Ok(())
     }
